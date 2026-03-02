@@ -10,20 +10,19 @@
 
 ## 快速开始
 
+从 npm 安装：
+
+```powershell
+npm install -g @rmwxxwmr/mcp-database-service
+mcp-database-service --config ./config/databases.example.json
+```
+
+从源码运行：
+
 ```bash
 npm install
 npm run build
 node dist/index.js --config ./config/databases.example.json
-```
-
-或者全局安装：
-
-```powershell
-pwsh -File .\scripts\install-global.ps1
-```
-
-```bash
-sh ./scripts/install-global.sh
 ```
 
 ## 支持矩阵
@@ -156,7 +155,13 @@ node dist/index.js --config ./config/databases.example.json
 
 推荐方式：
 
-1. 使用辅助脚本：
+1. 直接从 npm 安装：
+
+```powershell
+npm install -g @rmwxxwmr/mcp-database-service
+```
+
+2. 或从本地源码树通过辅助脚本安装：
 
 ```powershell
 pwsh -File .\scripts\install-global.ps1
@@ -170,7 +175,7 @@ sh ./scripts/install-global.sh
 
 这些脚本会安装依赖、构建项目、通过 `npm pack` 生成 tarball、再用 `npm install -g <tarball>` 全局安装，最后删除临时 tarball。它们不会使用 `npm link`。
 
-2. 或手动安装打包产物：
+3. 或手动安装打包产物：
 
 ```powershell
 npm pack
@@ -183,12 +188,6 @@ npm install -g .\mcp-database-service-0.1.0.tgz
 
 ```powershell
 mcp-database-service --config .\config\databases.example.json
-```
-
-如果以后发布到 npm，安装方式就会变成：
-
-```powershell
-npm install -g mcp-database-service
 ```
 
 MCP 服务配置示例：
@@ -231,6 +230,7 @@ MCP 服务配置示例：
 - 如果 MCP client 支持交互确认，服务会在执行非查询 SQL 前通过 MCP elicitation 请求用户确认
 - 如果 MCP client 不支持 elicitation，`execute_statement` 会自动退回到二段式确认流程：第一次调用返回确认详情和 `confirmationId`，用户确认后，第二次必须带上 `confirmationId` 和 `confirmExecution: true`，并重复同一条 SQL 才会真正执行
 - `execute_statement` 的确认信息会包含 SQL 类型、目标对象、SQL 预览、参数预览，以及高风险语句的风险提示
+
 
 
 

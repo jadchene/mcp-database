@@ -1,6 +1,6 @@
 {
-  "name": "mcp-database-service",
-  "version": "0.1.0",
+  "name": "@rmwxxwmr/mcp-database-service",
+  "version": "0.1.2",
   "description": "A multi-database MCP server with lazy short-lived connections, strong read-only defaults, and explicit confirmation for writable SQL.",
   "type": "module",
   "main": "dist/index.js",
@@ -16,6 +16,7 @@
     "dist/index.js",
     "dist/index.d.ts",
     "README.md",
+    "LICENSE",
     "config/databases.example.json"
   ],
   "scripts": {
@@ -35,6 +36,14 @@
     "redis",
     "opengauss"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rmwxxwmr/mcp-database.git"
+  },
+  "homepage": "https://github.com/rmwxxwmr/mcp-database#readme",
+  "bugs": {
+    "url": "https://github.com/rmwxxwmr/mcp-database/issues"
+  },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

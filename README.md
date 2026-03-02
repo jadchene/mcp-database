@@ -10,20 +10,19 @@ This project is intended for AI agents and MCP clients that need safe database d
 
 ## Quick Start
 
+Install from npm:
+
+```powershell
+npm install -g @rmwxxwmr/mcp-database-service
+mcp-database-service --config ./config/databases.example.json
+```
+
+Run from source:
+
 ```bash
 npm install
 npm run build
 node dist/index.js --config ./config/databases.example.json
-```
-
-Or install globally:
-
-```powershell
-pwsh -File .\scripts\install-global.ps1
-```
-
-```bash
-sh ./scripts/install-global.sh
 ```
 
 ## Support Matrix
@@ -156,7 +155,13 @@ This project exposes a CLI command named `mcp-database-service` through the pack
 
 Recommended options:
 
-1. Use the helper script:
+1. Install from npm:
+
+```powershell
+npm install -g @rmwxxwmr/mcp-database-service
+```
+
+2. Or install from the local source tree with the helper script:
 
 ```powershell
 pwsh -File .\scripts\install-global.ps1
@@ -170,7 +175,7 @@ sh ./scripts/install-global.sh
 
 The helper scripts install dependencies, build the project, create a tarball with `npm pack`, install that tarball globally with `npm install -g <tarball>`, and then delete the temporary tarball. They do not use `npm link`.
 
-2. Or install the packed tarball manually:
+3. Or install the packed tarball manually:
 
 ```powershell
 npm pack
@@ -183,12 +188,6 @@ After installation, the command can be used like this:
 
 ```powershell
 mcp-database-service --config .\config\databases.example.json
-```
-
-If you publish this package to npm later, the install form becomes:
-
-```powershell
-npm install -g mcp-database-service
 ```
 
 Example MCP server configuration:
@@ -231,6 +230,7 @@ Example MCP server configuration:
 - Before executing a non-query SQL statement, the server asks the MCP client for explicit user confirmation through MCP elicitation when the client supports it.
 - If the MCP client does not support elicitation, `execute_statement` automatically falls back to a two-step confirmation flow: the first call returns confirmation details and a `confirmationId`, and the second call must resend the same SQL with `confirmationId` and `confirmExecution: true` after the user confirms.
 - `execute_statement` confirmation includes SQL type, target object, SQL preview, parameter preview, and risk hints for dangerous statements.
+
 
 
 
