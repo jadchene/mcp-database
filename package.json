@@ -1,0 +1,53 @@
+{
+  "name": "mcp-database-service",
+  "version": "0.1.0",
+  "description": "A multi-database MCP server with lazy short-lived connections, strong read-only defaults, and explicit confirmation for writable SQL.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp-database-service": "./dist/index.js"
+  },
+  "files": [
+    "dist/config",
+    "dist/core",
+    "dist/db",
+    "dist/server",
+    "dist/utils",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "README.md",
+    "config/databases.example.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node --test dist/tests/configValidation.test.js dist/tests/readonlyGuard.test.js",
+    "verify:reload": "node scripts/verify-config-reload.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "database",
+    "mysql",
+    "oracle",
+    "postgresql",
+    "redis",
+    "opengauss"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "mysql2": "^3.14.0",
+    "oracledb": "^6.8.0",
+    "pg": "^8.16.0",
+    "redis": "^5.6.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.15.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
