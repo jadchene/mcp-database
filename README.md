@@ -64,7 +64,7 @@ Provide the config path by one of these methods:
 1. `node dist/index.js --config ./config/databases.json`
 2. Set `MCP_DATABASE_CONFIG=/absolute/path/to/databases.json`
 
-The configuration file must be a JSON object with a top-level `databases` array. Example:
+The configuration file must be a JSON object with a required top-level `databases` array. Optional top-level sections such as `logging` and `query` may also be provided. Example:
 
 ```json
 {
@@ -231,5 +231,6 @@ Example MCP server configuration:
 - Before executing a non-query SQL statement, the server asks the MCP client for explicit user confirmation through MCP elicitation when the client supports it.
 - If the MCP client does not support elicitation, `execute_statement` automatically falls back to a two-step confirmation flow: the first call returns confirmation details and a `confirmationId`, and the second call must resend the same SQL with `confirmationId` and `confirmExecution: true` after the user confirms.
 - `execute_statement` confirmation includes SQL type, target object, SQL preview, parameter preview, and risk hints for dangerous statements.
+
 
 

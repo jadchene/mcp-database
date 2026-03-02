@@ -64,7 +64,7 @@ sh ./scripts/install-global.sh
 1. `node dist/index.js --config ./config/databases.json`
 2. 设置 `MCP_DATABASE_CONFIG=/absolute/path/to/databases.json`
 
-配置文件必须是一个带顶层 `databases` 数组的 JSON 对象。示例：
+配置文件必须是一个 JSON 对象，其中顶层 `databases` 数组是必填项；`logging`、`query` 等顶层配置项是可选的。示例：
 
 ```json
 {
@@ -231,5 +231,6 @@ MCP 服务配置示例：
 - 如果 MCP client 支持交互确认，服务会在执行非查询 SQL 前通过 MCP elicitation 请求用户确认
 - 如果 MCP client 不支持 elicitation，`execute_statement` 会自动退回到二段式确认流程：第一次调用返回确认详情和 `confirmationId`，用户确认后，第二次必须带上 `confirmationId` 和 `confirmExecution: true`，并重复同一条 SQL 才会真正执行
 - `execute_statement` 的确认信息会包含 SQL 类型、目标对象、SQL 预览、参数预览，以及高风险语句的风险提示
+
 
 
