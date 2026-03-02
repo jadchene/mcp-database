@@ -36,6 +36,10 @@ sh ./scripts/install-global.sh
 | Oracle | 是 | 是 | 是 | 否 | 是 |
 | Redis | 是 | 仅 Redis 专用工具 | 否 | 否 | 否 |
 
+补充说明：
+- show_create_table 当前支持 MySQL 和 Oracle；PostgreSQL 与 openGauss 目前会返回 NOT_SUPPORTED。
+- show_variables、ind_long_running_queries、ind_blocking_sessions、show_locks 这类运行态排障工具依赖数据库账号可见性和权限，结果可能为空或受限。
+
 ## 支持的数据库
 - MySQL
 - Oracle
@@ -119,9 +123,17 @@ Oracle 同时支持 Thin 和 Thick 模式。Thick 模式仍然使用同一个 `o
 - `ping_database`：测试某个已配置目标的连通性
 - `list_schemas`：列出某个 SQL 目标下的 schema
 - `list_tables`：列出某个 SQL schema 或默认 schema 下的表 / 视图
+- `list_views`：列出某个 SQL schema 或默认 schema 下的视图
 - `describe_table`：查看列信息，适合写 join、报表或优化 SQL 前使用
+- `show_create_table`：在当前数据库支持时查看数据库侧的 DDL 定义
+- `search_tables`：按部分名称搜索表或视图
+- `search_columns`：按部分名称搜索 schema 下的列
 - `list_indexes`：查看表索引，适合做性能分析
 - `get_table_statistics`：查看近似行数、存储信息和数据库特定统计信息
+- `show_variables`：查看数据库运行时参数
+- `find_long_running_queries`：查看超过阈值的当前长时间运行会话
+- `find_blocking_sessions`：查看当前阻塞关系
+- `show_locks`：查看数据库当前可见的锁信息
 - `execute_query`：执行只读 SQL 查询；传原始查询 SQL，不要传写 SQL
 - `explain_query`：查看只读 SQL 的静态执行计划；传原始查询 SQL，不要传 `EXPLAIN ...`
 - `analyze_query`：查看只读 SQL 的运行时分析；传原始查询 SQL，不要传 `EXPLAIN ANALYZE ...`
@@ -219,3 +231,4 @@ MCP 服务配置示例：
 - 如果 MCP client 支持交互确认，服务会在执行非查询 SQL 前通过 MCP elicitation 请求用户确认
 - 如果 MCP client 不支持 elicitation，`execute_statement` 会自动退回到二段式确认流程：第一次调用返回确认详情和 `confirmationId`，用户确认后，第二次必须带上 `confirmationId` 和 `confirmExecution: true`，并重复同一条 SQL 才会真正执行
 - `execute_statement` 的确认信息会包含 SQL 类型、目标对象、SQL 预览、参数预览，以及高风险语句的风险提示
+

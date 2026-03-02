@@ -36,6 +36,10 @@ sh ./scripts/install-global.sh
 | Oracle | Yes | Yes | Yes | No | Yes |
 | Redis | Yes | Limited to Redis tools | No | No | No |
 
+Notes:
+- show_create_table currently supports MySQL and Oracle. PostgreSQL and openGauss currently return NOT_SUPPORTED.
+- Operational tools such as show_variables, ind_long_running_queries, ind_blocking_sessions, and show_locks depend on the visibility and privileges of the configured database account.
+
 ## Supported Databases
 - MySQL
 - Oracle
@@ -119,9 +123,17 @@ Oracle supports both Thin and Thick mode. Thick mode uses the same `oracledb` pa
 - `ping_database`: test connectivity for one configured target
 - `list_schemas`: list schemas for one SQL target
 - `list_tables`: list tables/views under one SQL schema or the default schema
+- `list_views`: list views under one SQL schema or the default schema
 - `describe_table`: inspect columns before writing joins, reports, or optimization SQL
+- `show_create_table`: inspect exact database-side DDL when the current database supports it
+- `search_tables`: search tables or views by partial name
+- `search_columns`: search columns by partial name across a schema
 - `list_indexes`: inspect table indexes for performance analysis
 - `get_table_statistics`: inspect approximate row counts, storage metrics, and database-specific table statistics
+- `show_variables`: inspect database runtime configuration variables
+- `find_long_running_queries`: inspect currently running sessions above a duration threshold
+- `find_blocking_sessions`: inspect current blocking relationships between sessions
+- `show_locks`: inspect current lock rows exposed by the database
 - `execute_query`: run one read-only SQL query; pass the original query SQL, not write SQL
 - `explain_query`: get the static execution plan for one read-only SQL query; pass the original query SQL, not `EXPLAIN ...`
 - `analyze_query`: get runtime analysis for one read-only SQL query; pass the original query SQL, not `EXPLAIN ANALYZE ...`
@@ -219,3 +231,4 @@ Example MCP server configuration:
 - Before executing a non-query SQL statement, the server asks the MCP client for explicit user confirmation through MCP elicitation when the client supports it.
 - If the MCP client does not support elicitation, `execute_statement` automatically falls back to a two-step confirmation flow: the first call returns confirmation details and a `confirmationId`, and the second call must resend the same SQL with `confirmationId` and `confirmExecution: true` after the user confirms.
 - `execute_statement` confirmation includes SQL type, target object, SQL preview, parameter preview, and risk hints for dangerous statements.
+
