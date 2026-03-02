@@ -1,6 +1,34 @@
 # MCP Database Service
 
-A standalone multi-database MCP server written in TypeScript. The server reads a JSON configuration file, exposes mostly read-oriented database tools, and uses lazy short-lived connections so database sessions are opened only when a specific tool call needs them. Optional write execution is supported only for targets configured with `readonly: false`, and every write statement requires explicit manual confirmation from the MCP client.
+A multi-database MCP server for Model Context Protocol (MCP), written in TypeScript.
+
+It supports MySQL, PostgreSQL, Oracle, openGauss, and Redis, with lazy short-lived connections, read-oriented database tools, SQL plan analysis, config reload, and guarded write execution.
+
+This project is intended for AI agents and MCP clients that need safe database discovery, querying, performance analysis, and controlled write operations.
+
+## Quick Start
+
+```bash
+npm install
+npm run build
+node dist/index.js --config ./config/databases.example.json
+```
+
+Or install globally:
+
+```powershell
+pwsh -File .\scripts\install-global.ps1
+```
+
+## Support Matrix
+
+| Database | Query Tools | Metadata Tools | `explain_query` | `analyze_query` | Write Support |
+| --- | --- | --- | --- | --- | --- |
+| MySQL | Yes | Yes | Yes | Yes | Yes |
+| PostgreSQL | Yes | Yes | Yes | Yes | Yes |
+| openGauss | Yes | Yes | Yes | Yes | Yes |
+| Oracle | Yes | Yes | Yes | No | Yes |
+| Redis | Yes | Limited to Redis tools | No | No | No |
 
 ## Supported Databases
 - MySQL
