@@ -38,7 +38,7 @@ sh ./scripts/install-global.sh
 
 Notes:
 - show_create_table currently supports MySQL and Oracle. PostgreSQL and openGauss currently return NOT_SUPPORTED.
-- Operational tools such as show_variables, ind_long_running_queries, ind_blocking_sessions, and show_locks depend on the visibility and privileges of the configured database account.
+- Operational tools such as `show_variables`, `find_long_running_queries`, `find_blocking_sessions`, and `show_locks` depend on the visibility and privileges of the configured database account.
 
 ## Supported Databases
 - MySQL
@@ -231,4 +231,5 @@ Example MCP server configuration:
 - Before executing a non-query SQL statement, the server asks the MCP client for explicit user confirmation through MCP elicitation when the client supports it.
 - If the MCP client does not support elicitation, `execute_statement` automatically falls back to a two-step confirmation flow: the first call returns confirmation details and a `confirmationId`, and the second call must resend the same SQL with `confirmationId` and `confirmExecution: true` after the user confirms.
 - `execute_statement` confirmation includes SQL type, target object, SQL preview, parameter preview, and risk hints for dangerous statements.
+
 

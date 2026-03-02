@@ -38,7 +38,7 @@ sh ./scripts/install-global.sh
 
 补充说明：
 - show_create_table 当前支持 MySQL 和 Oracle；PostgreSQL 与 openGauss 目前会返回 NOT_SUPPORTED。
-- show_variables、ind_long_running_queries、ind_blocking_sessions、show_locks 这类运行态排障工具依赖数据库账号可见性和权限，结果可能为空或受限。
+- `show_variables`、`find_long_running_queries`、`find_blocking_sessions`、`show_locks` 这类运行态排障工具依赖数据库账号可见性和权限，结果可能为空或受限。
 
 ## 支持的数据库
 - MySQL
@@ -231,4 +231,5 @@ MCP 服务配置示例：
 - 如果 MCP client 支持交互确认，服务会在执行非查询 SQL 前通过 MCP elicitation 请求用户确认
 - 如果 MCP client 不支持 elicitation，`execute_statement` 会自动退回到二段式确认流程：第一次调用返回确认详情和 `confirmationId`，用户确认后，第二次必须带上 `confirmationId` 和 `confirmExecution: true`，并重复同一条 SQL 才会真正执行
 - `execute_statement` 的确认信息会包含 SQL 类型、目标对象、SQL 预览、参数预览，以及高风险语句的风险提示
+
 
