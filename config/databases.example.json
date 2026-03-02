@@ -1,39 +1,44 @@
-[
-  {
-    "key": "main-mysql",
-    "type": "mysql",
-    "readonly": true,
-    "connection": {
-      "host": "127.0.0.1",
-      "port": 3306,
-      "databaseName": "app_db",
-      "user": "root",
-      "password": "secret",
-      "connectTimeoutMs": 5000
-    }
+{
+  "logging": {
+    "enabled": false
   },
-  {
-    "key": "cache-redis",
-    "type": "redis",
-    "readonly": true,
-    "connection": {
-      "url": "redis://127.0.0.1:6379/0",
-      "connectTimeoutMs": 5000
+  "databases": [
+    {
+      "key": "main-mysql",
+      "type": "mysql",
+      "readonly": true,
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "databaseName": "app_db",
+        "user": "root",
+        "password": "secret",
+        "connectTimeoutMs": 5000
+      }
+    },
+    {
+      "key": "cache-redis",
+      "type": "redis",
+      "readonly": true,
+      "connection": {
+        "url": "redis://127.0.0.1:6379/0",
+        "connectTimeoutMs": 5000
+      }
+    },
+    {
+      "key": "oracle-thick-example",
+      "type": "oracle",
+      "readonly": true,
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 1521,
+        "serviceName": "XEPDB1",
+        "user": "system",
+        "password": "secret",
+        "connectTimeoutMs": 5000,
+        "clientMode": "thick",
+        "clientLibDir": "D:\\Work\\Navicat\\instantclient_19_25"
+      }
     }
-  },
-  {
-    "key": "oracle-thick-example",
-    "type": "oracle",
-    "readonly": true,
-    "connection": {
-      "host": "127.0.0.1",
-      "port": 1521,
-      "serviceName": "XEPDB1",
-      "user": "system",
-      "password": "secret",
-      "connectTimeoutMs": 5000,
-      "clientMode": "thick",
-      "clientLibDir": "D:\\Work\\Navicat\\instantclient_19_25"
-    }
-  }
-]
+  ]
+}

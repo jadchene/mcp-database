@@ -4,6 +4,7 @@ import type {
   PostgresDatabaseConfig
 } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
+import { log } from "../../core/logger.js";
 import type {
   ColumnInfo,
   IndexInfo,
@@ -78,6 +79,10 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
 
   public async ping(): Promise<PingResult> {
     const startedAt = Date.now();
+    log("info", "Executing SQL ping", {
+      databaseKey: this.config.key,
+      sql: this.pingSql()
+    });
     await this.executeRaw(this.pingSql());
     return {
       ok: true,
@@ -86,7 +91,13 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
   }
 
   public async listSchemas(): Promise<SchemaInfo[]> {
-    const rows = await this.executeRaw(this.listSchemasSql());
+    const sql = this.listSchemasSql();
+    log("info", "Executing SQL metadata query", {
+      databaseKey: this.config.key,
+      operation: "listSchemas",
+      sql
+    });
+    const rows = await this.executeRaw(sql);
     return rows.map((row) => ({
       schema: String(row.schema ?? row.SCHEMA ?? row.SCHEMA_NAME ?? row.USERNAME)
     }));
@@ -94,6 +105,12 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
 
   public async listTables(schema?: string): Promise<TableInfo[]> {
     const query = this.listTablesSql(schema);
+    log("info", "Executing SQL metadata query", {
+      databaseKey: this.config.key,
+      operation: "listTables",
+      sql: query.sql,
+      params: query.params ?? []
+    });
     const rows = await this.executeRaw(query.sql, query.params);
     return rows.map((row) => ({
       schema: String(
@@ -118,6 +135,12 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
 
     const query = this.describeTableSql(schema, table);
+    log("info", "Executing SQL metadata query", {
+      databaseKey: this.config.key,
+      operation: "describeTable",
+      sql: query.sql,
+      params: query.params ?? []
+    });
     const rows = await this.executeRaw(query.sql, query.params);
     return rows.map((row) => ({
       name: String(row.name ?? row.NAME ?? row.column_name ?? row.COLUMN_NAME),
@@ -154,6 +177,12 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
 
     const query = this.listIndexesSql(schema, table);
+    log("info", "Executing SQL metadata query", {
+      databaseKey: this.config.key,
+      operation: "listIndexes",
+      sql: query.sql,
+      params: query.params ?? []
+    });
     const rows = await this.executeRaw(query.sql, query.params);
     return rows.map((row) => ({
       schema: String(
@@ -225,6 +254,12 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
 
     const query = this.tableStatisticsSql(schema, table);
+    log("info", "Executing SQL metadata query", {
+      databaseKey: this.config.key,
+      operation: "getTableStatistics",
+      sql: query.sql,
+      params: query.params ?? []
+    });
     const rows = normalizeRows(await this.executeRaw(query.sql, query.params));
     if (rows.length === 0) {
       return null;
@@ -247,6 +282,12 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
 
     try {
+      log("info", "Executing SQL explain query", {
+        databaseKey: this.config.key,
+        sql,
+        params: params ?? [],
+        maxRows
+      });
       const rows = await this.explainQueryRows(sql, params);
       const normalizedRows = normalizeRows(rows);
       const limitedRows = normalizedRows.slice(0, maxRows);
@@ -268,6 +309,12 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
 
     try {
+      log("info", "Executing SQL analyze query", {
+        databaseKey: this.config.key,
+        sql,
+        params: params ?? [],
+        maxRows
+      });
       const rows = await this.analyzeQueryRows(sql, params);
       const normalizedRows = normalizeRows(rows);
       const limitedRows = normalizedRows.slice(0, maxRows);
@@ -285,6 +332,12 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
   public async executeQuery(sql: string, params: unknown[] | undefined, maxRows: number): Promise<QueryResult> {
     try {
       assertReadonlySql(sql);
+      log("info", "Executing SQL query", {
+        databaseKey: this.config.key,
+        sql,
+        params: params ?? [],
+        maxRows
+      });
       const rows = await this.executeRaw(sql, params);
       const normalizedRows = normalizeRows(rows);
       const limitedRows = normalizedRows.slice(0, maxRows);
@@ -306,6 +359,11 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
 
     try {
+      log("info", "Executing SQL statement", {
+        databaseKey: this.config.key,
+        sql,
+        params: params ?? []
+      });
       const result = await this.executeStatementRaw(sql, params);
       return {
         command: info.firstKeyword,

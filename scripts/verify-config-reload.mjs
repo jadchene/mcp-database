@@ -12,48 +12,64 @@ async function main() {
   const configPath = path.join(tempDir, "reload-config.json");
   const serverPath = path.resolve("dist/index.js");
 
-  const initialConfig = [
-    {
-      key: "mysql-alpha",
-      type: "mysql",
-      readonly: true,
-      connection: {
-        host: "127.0.0.1",
-        port: 3306,
-        databaseName: "alpha_db",
-        user: "root",
-        password: "secret"
+  const initialConfig = {
+    logging: {
+      enabled: true
+    },
+    databases: [
+      {
+        key: "mysql-alpha",
+        type: "mysql",
+        readonly: true,
+        connection: {
+          host: "127.0.0.1",
+          port: 3306,
+          databaseName: "alpha_db",
+          user: "root",
+          password: "secret"
+        }
       }
-    }
-  ];
+    ]
+  };
 
-  const watchedConfig = [
-    ...initialConfig,
-    {
-      key: "redis-beta",
-      type: "redis",
-      readonly: true,
-      connection: {
-        url: "redis://default:secret@127.0.0.1:6379/0"
+  const watchedConfig = {
+    logging: {
+      enabled: true,
+      directory: "./logs"
+    },
+    databases: [
+      ...initialConfig.databases,
+      {
+        key: "redis-beta",
+        type: "redis",
+        readonly: true,
+        connection: {
+          url: "redis://default:secret@127.0.0.1:6379/0"
+        }
       }
-    }
-  ];
+    ]
+  };
 
-  const manualReloadConfig = [
-    {
-      key: "oracle-gamma",
-      type: "oracle",
-      readonly: true,
-      connection: {
-        host: "127.0.0.1",
-        port: 1521,
-        serviceName: "XEPDB1",
-        user: "system",
-        password: "secret",
-        clientMode: "thin"
+  const manualReloadConfig = {
+    logging: {
+      enabled: false
+    },
+    databases: [
+      {
+        key: "oracle-gamma",
+        type: "oracle",
+        readonly: true,
+        connection: {
+          host: "127.0.0.1",
+          port: 1521,
+          serviceName: "XEPDB1",
+          user: "system",
+          password: "secret",
+          clientMode: "thin"
+        }
       }
-    }
-  ];
+    ]
+  };
 
   await mkdir(tempDir, { recursive: true });
   await writeJson(configPath, initialConfig);
@@ -80,11 +96,14 @@ async function main() {
 
     const initialSummary = await callJsonTool(client, "show_loaded_config", {});
     assert.equal(initialSummary.databaseCount, 1);
+    assert.equal(initialSummary.logging?.enabled, true);
     assert.equal(initialSummary.items[0]?.key, "mysql-alpha");
     assert.equal(initialSummary.items[0]?.connection?.databaseName, "alpha_db");
 
     await writeJson(configPath, watchedConfig);
     const watchedSummary = await waitForConfig(client, (summary) => summary.databaseCount === 2);
+    assert.equal(watchedSummary.logging?.enabled, true);
+    assert.match(String(watchedSummary.logging?.directory), /logs/i);
     assert.equal(watchedSummary.items[1]?.key, "redis-beta");
     assert.match(String(watchedSummary.items[1]?.connection?.url), /\*\*\*/);
 
@@ -97,6 +116,7 @@ async function main() {
     await writeJson(configPath, manualReloadConfig);
     const manualSummary = await callJsonTool(client, "reload_config", {});
     assert.equal(manualSummary.databaseCount, 1);
+    assert.equal(manualSummary.logging?.enabled, false);
     assert.equal(manualSummary.items[0]?.key, "oracle-gamma");
     assert.equal(manualSummary.items[0]?.connection?.serviceName, "XEPDB1");
   } finally {
@@ -111,6 +131,7 @@ async function main() {
     checked: [
       "show_loaded_config initial snapshot",
       "automatic config reload after valid file change",
+      "logging summary in show_loaded_config",
       "sanitized connection summary in show_loaded_config",
       "invalid auto-reload keeps previous in-memory config",
       "manual reload_config replaces in-memory config"

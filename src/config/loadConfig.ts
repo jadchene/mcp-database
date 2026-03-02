@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { ApplicationError } from "../core/errors.js";
-import { log } from "../core/logger.js";
+import { configureLogger, log } from "../core/logger.js";
 import type { LoadedConfig } from "./configTypes.js";
 import { validateDatabaseConfig } from "./configValidation.js";
 
@@ -44,12 +45,23 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
     });
   }
 
-  const databases = validateDatabaseConfig(rawConfig);
+  const validatedConfig = validateDatabaseConfig(rawConfig);
+  const databases = validatedConfig.databases;
   const databaseMap = new Map(databases.map((item) => [item.key, item]));
+  const loggingDirectory = resolveLoggingDirectory(configPath, validatedConfig.logging.directory);
+
+  configureLogger({
+    enabled: validatedConfig.logging.enabled,
+    directory: loggingDirectory
+  });
 
   log("info", "Database configuration loaded", {
     configPath,
     count: databases.length,
+    logging: {
+      enabled: validatedConfig.logging.enabled,
+      directory: loggingDirectory
+    },
     databases: databases.map((item) => ({
       key: item.key,
       type: item.type,
@@ -61,11 +73,23 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
     configPath,
     loadedAt: new Date().toISOString(),
     databases,
-    databaseMap
+    databaseMap,
+    logging: {
+      enabled: validatedConfig.logging.enabled,
+      directory: loggingDirectory
+    }
   };
 }
 
 export async function loadConfig(argv: string[], env: NodeJS.ProcessEnv): Promise<LoadedConfig> {
   const configPath = resolveConfigPath(argv, env);
   return loadConfigFromPath(configPath);
+}
+
+function resolveLoggingDirectory(configPath: string, directory?: string): string {
+  if (!directory) {
+    return path.join(os.tmpdir(), "mcp-database-service");
+  }
+
+  return path.isAbsolute(directory) ? directory : path.resolve(path.dirname(configPath), directory);
 }

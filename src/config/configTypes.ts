@@ -66,9 +66,22 @@ export type DatabaseConfig =
   | PostgresDatabaseConfig
   | RedisDatabaseConfig;
 
+export interface LoggingConfig {
+  enabled: boolean;
+  directory?: string;
+}
+
+export interface RootConfig {
+  databases: DatabaseConfig[];
+  logging: LoggingConfig;
+}
+
 export interface LoadedConfig {
   configPath: string;
   loadedAt: string;
   databases: DatabaseConfig[];
   databaseMap: Map<string, DatabaseConfig>;
+  logging: LoggingConfig & {
+    directory: string;
+  };
 }

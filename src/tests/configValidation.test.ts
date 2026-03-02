@@ -5,49 +5,77 @@ import { ApplicationError } from "../core/errors.js";
 import { validateDatabaseConfig } from "../config/configValidation.js";
 
 test("config validation accepts a valid mysql entry", () => {
-  const result = validateDatabaseConfig([
-    {
-      key: "main-mysql",
-      type: "mysql",
-      readonly: true,
-      connection: {
-        host: "127.0.0.1",
-        databaseName: "app_db",
-        user: "root",
-        password: "secret"
+  const result = validateDatabaseConfig({
+    logging: {
+      enabled: false
+    },
+    databases: [
+      {
+        key: "main-mysql",
+        type: "mysql",
+        readonly: true,
+        connection: {
+          host: "127.0.0.1",
+          databaseName: "app_db",
+          user: "root",
+          password: "secret"
+        }
       }
-    }
-  ]);
+    ]
+  });
 
-  assert.equal(result.length, 1);
-  assert.equal(result[0]?.key, "main-mysql");
+  assert.equal(result.logging.enabled, false);
+  assert.equal(result.databases.length, 1);
+  assert.equal(result.databases[0]?.key, "main-mysql");
 });
 
 test("config validation rejects duplicate names", () => {
   assert.throws(
     () => {
-      validateDatabaseConfig([
-        {
-          key: "dup",
-          type: "mysql",
-          readonly: true,
-          connection: {
-            host: "127.0.0.1",
-            databaseName: "app_db",
-            user: "root",
-            password: "secret"
-          }
+      validateDatabaseConfig({
+        logging: {
+          enabled: false
         },
-        {
-          key: "dup",
-          type: "redis",
-          readonly: true,
-          connection: {
-            url: "redis://127.0.0.1:6379/0"
+        databases: [
+          {
+            key: "dup",
+            type: "mysql",
+            readonly: true,
+            connection: {
+              host: "127.0.0.1",
+              databaseName: "app_db",
+              user: "root",
+              password: "secret"
+            }
+          },
+          {
+            key: "dup",
+            type: "redis",
+            readonly: true,
+            connection: {
+              url: "redis://127.0.0.1:6379/0"
+            }
           }
-        }
-      ]);
+        ]
+      });
     },
     (error: unknown) => error instanceof ApplicationError && error.code === "CONFIG_ERROR"
   );
+});
+
+test("config validation defaults logging to disabled when omitted", () => {
+  const result = validateDatabaseConfig({
+    databases: [
+      {
+        key: "redis-main",
+        type: "redis",
+        readonly: true,
+        connection: {
+          url: "redis://127.0.0.1:6379/0"
+        }
+      }
+    ]
+  });
+
+  assert.equal(result.logging.enabled, false);
 });

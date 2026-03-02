@@ -14,6 +14,10 @@ export function summarizeLoadedConfig(config: LoadedConfig): Record<string, unkn
     configPath: config.configPath,
     loadedAt: config.loadedAt,
     databaseCount: config.databases.length,
+    logging: {
+      enabled: config.logging.enabled,
+      directory: config.logging.directory
+    },
     items: config.databases.map((database) => summarizeDatabaseConfig(database))
   };
 }

@@ -45,6 +45,7 @@ sh ./scripts/install-global.sh
 
 ## 特性
 - 单个配置文件中支持多个数据库目标
+- 支持可选的文件日志，可自定义输出目录
 - 无需重启服务即可手动刷新配置
 - JSON 配置文件变更后自动热刷新
 - 对查询工具进行严格只读限制
@@ -59,25 +60,32 @@ sh ./scripts/install-global.sh
 1. `node dist/index.js --config ./config/databases.json`
 2. 设置 `MCP_DATABASE_CONFIG=/absolute/path/to/databases.json`
 
-配置文件必须是一个 JSON 数组。示例：
+配置文件必须是一个带顶层 `databases` 数组的 JSON 对象。示例：
 
 ```json
-[
-  {
-    "key": "main-mysql",
-    "type": "mysql",
-    "readonly": true,
-    "connection": {
-      "host": "127.0.0.1",
-      "port": 3306,
-      "databaseName": "app_db",
-      "user": "root",
-      "password": "secret",
-      "connectTimeoutMs": 5000
+{
+  "logging": {
+    "enabled": false
+  },
+  "databases": [
+    {
+      "key": "main-mysql",
+      "type": "mysql",
+      "readonly": true,
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "databaseName": "app_db",
+        "user": "root",
+        "password": "secret",
+        "connectTimeoutMs": 5000
+      }
     }
-  }
-]
+  ]
+}
 ```
+
+`logging.enabled` 默认是 `false`。开启后，日志默认写入系统临时目录；你也可以通过 `logging.directory` 自定义目录，若填相对路径，则相对于配置文件所在目录解析。
 
 Oracle 同时支持 Thin 和 Thick 模式。Thick 模式仍然使用同一个 `oracledb` 包，但要求宿主机安装 Oracle Instant Client。示例：
 
@@ -189,6 +197,7 @@ MCP 服务配置示例：
 - 你仍然可以使用 `reload_config` 手动刷新，而无需重启进程
 - 刷新是原子的：如果新文件无效，旧的内存配置会继续保持生效
 - 可以用 `show_loaded_config` 查看当前配置路径、加载时间和已配置数据库目标
+- `show_loaded_config` 也会返回当前日志开关状态和解析后的日志目录
 - `show_loaded_config` 还会返回脱敏后的连接摘要，例如 host、port、databaseName 或 serviceName、用户名以及 Oracle client mode，但不会暴露密码
 
 ## Oracle 说明

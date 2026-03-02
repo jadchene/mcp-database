@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { ApplicationError } from "../core/errors.js";
-import type { DatabaseConfig } from "./configTypes.js";
+import type { DatabaseConfig, RootConfig } from "./configTypes.js";
 
 const readonlySchema = z.boolean();
 const keySchema = z.string().min(1);
@@ -102,16 +102,28 @@ const redisSchema = z.object({
     })
 });
 
-const configArraySchema = z
+const databaseArraySchema = z
   .array(z.discriminatedUnion("type", [mysqlSchema, oracleSchema, postgresSchema, openGaussSchema, redisSchema]))
   .min(1);
+
+const rootConfigSchema = z.object({
+  databases: databaseArraySchema,
+  logging: z
+    .object({
+      enabled: z.boolean().default(false),
+      directory: z.string().min(1).optional()
+    })
+    .default({
+      enabled: false
+    })
+}).strict();
 
 /**
  * Validation happens once at startup. The returned array is already typed and
  * safe for the runtime to consume.
  */
-export function validateDatabaseConfig(rawConfig: unknown): DatabaseConfig[] {
-  const parsed = configArraySchema.safeParse(rawConfig);
+export function validateDatabaseConfig(rawConfig: unknown): RootConfig {
+  const parsed = rootConfigSchema.safeParse(rawConfig);
   if (!parsed.success) {
     throw new ApplicationError("CONFIG_ERROR", "Invalid database configuration", {
       issues: parsed.error.issues
@@ -119,7 +131,7 @@ export function validateDatabaseConfig(rawConfig: unknown): DatabaseConfig[] {
   }
 
   const keys = new Set<string>();
-  for (const config of parsed.data) {
+  for (const config of parsed.data.databases) {
     if (keys.has(config.key)) {
       throw new ApplicationError("CONFIG_ERROR", `Duplicate database key: ${config.key}`);
     }
@@ -127,5 +139,11 @@ export function validateDatabaseConfig(rawConfig: unknown): DatabaseConfig[] {
     keys.add(config.key);
   }
 
-  return parsed.data;
+  return {
+    databases: parsed.data.databases as DatabaseConfig[],
+    logging: {
+      enabled: parsed.data.logging.enabled,
+      directory: parsed.data.logging.directory
+    }
+  };
 }

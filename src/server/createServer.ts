@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { watchFile, unwatchFile } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -19,6 +20,43 @@ interface PendingStatementConfirmation {
   params?: unknown[];
   expiresAt: number;
 }
+
+interface StatementConfirmationInput {
+  databaseKey: string;
+  sql: string;
+  params?: unknown[];
+  confirmationId?: string;
+  confirmExecution?: boolean;
+}
+
+interface StatementConfirmationContext {
+  database: LoadedConfig["databases"][number];
+  input: StatementConfirmationInput;
+  pendingConfirmations: Map<string, PendingStatementConfirmation>;
+  supportsInteractiveConfirmation: boolean;
+  elicitConfirmation?: (message: string) => Promise<boolean>;
+  now?: () => number;
+  createId?: () => string;
+  maxPendingConfirmations?: number;
+}
+
+type StatementConfirmationResult =
+  | { status: "confirmed" }
+  | {
+    status: "pending";
+    confirmationId: string;
+    confirmationMode: "two_step";
+    message: string;
+    statement: string;
+    targetObject: string;
+    riskLevel: "normal" | "high" | "critical";
+    riskDetails: string;
+    sqlPreview: string;
+    paramsPreview: string;
+  };
+
+const PENDING_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
+const MAX_PENDING_STATEMENT_CONFIRMATIONS = 1000;
 
 async function withDatabaseAdapter<T>(
   config: LoadedConfig,
@@ -128,15 +166,6 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     watcherDisposed = true;
   };
 
-  const cleanupExpiredConfirmations = (): void => {
-    const now = Date.now();
-    for (const [confirmationId, pending] of pendingStatementConfirmations.entries()) {
-      if (pending.expiresAt <= now) {
-        pendingStatementConfirmations.delete(confirmationId);
-      }
-    }
-  };
-
   watchFile(
     currentConfig.configPath,
     { interval: 1000 },
@@ -192,6 +221,11 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     }
 
     try {
+      log("info", "Tool execution started", {
+        toolName: tool.name,
+        arguments: summarizeToolArguments(request.params.arguments ?? {})
+      });
+
       const result = await tool.run(request.params.arguments ?? {}, {
         getConfig() {
           return currentConfig;
@@ -215,105 +249,47 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
             throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${input.databaseKey}`);
           }
 
-          if (database.type === "redis") {
-            throw new ApplicationError("NOT_SUPPORTED", "Redis does not support SQL statement execution");
-          }
-
-          if (database.readonly) {
-            throw new ApplicationError("NOT_SUPPORTED", `${input.databaseKey} is configured as readonly`);
-          }
-
-          const statement = inspectSqlStatement(input.sql);
-          if (statement.isReadonlyQuery) {
-            throw new ApplicationError("INVALID_ARGUMENT", "Use execute_query for query SQL");
-          }
-
-          const previewSql = buildSqlPreview(input.sql);
-          const previewParams = buildParamsPreview(input.params);
-          const targetObject = extractSqlTargetObject(statement.firstKeyword, input.sql);
-          const riskSummary = buildRiskSummary(statement.riskLevel, statement.riskReasons);
           const clientCapabilities = server.getClientCapabilities();
-
-          cleanupExpiredConfirmations();
-          if (!clientCapabilities?.elicitation) {
-            if (input.confirmationId && input.confirmExecution === true) {
-              const pending = pendingStatementConfirmations.get(input.confirmationId);
-              if (!pending) {
-                throw new ApplicationError(
-                  "INVALID_ARGUMENT",
-                  "Unknown or expired confirmationId for execute_statement"
-                );
-              }
-
-              if (
-                pending.databaseKey !== input.databaseKey ||
-                pending.sql !== input.sql ||
-                JSON.stringify(pending.params ?? []) !== JSON.stringify(input.params ?? [])
-              ) {
-                throw new ApplicationError(
-                  "INVALID_ARGUMENT",
-                  "execute_statement confirmation does not match the pending SQL request"
-                );
-              }
-
-              pendingStatementConfirmations.delete(input.confirmationId);
-              return { status: "confirmed" } as const;
-            }
-
-            const confirmationId = createConfirmationId();
-            pendingStatementConfirmations.set(confirmationId, {
-              databaseKey: input.databaseKey,
-              sql: input.sql,
-              params: input.params,
-              expiresAt: Date.now() + 10 * 60 * 1000
-            });
-
-            return {
-              status: "pending" as const,
-              confirmationId,
-              confirmationMode: "two_step" as const,
-              message:
-                "This MCP client does not support interactive confirmation. Ask the user whether to execute the statement, then call execute_statement again with the same databaseKey, sql, params, confirmationId, and confirmExecution=true.",
-              statement: statement.firstKeyword,
-              targetObject,
-              riskLevel: statement.riskLevel,
-              riskDetails: riskSummary,
-              sqlPreview: previewSql,
-              paramsPreview: previewParams
-            };
-          }
-
-          const confirmation = await server.elicitInput({
-            mode: "form",
-            message:
-              `Manual confirmation required before executing write SQL.\n` +
-              `Database Key: ${input.databaseKey}\n` +
-              `Statement: ${statement.firstKeyword}\n` +
-              `Target: ${targetObject}\n` +
-              `Risk: ${statement.riskLevel.toUpperCase()}\n` +
-              `Risk Details: ${riskSummary}\n` +
-              `SQL Preview: ${previewSql}\n` +
-              `Params: ${previewParams}`,
-            requestedSchema: {
-              type: "object",
-              properties: {
-                confirm: {
-                  type: "boolean",
-                  title: "Confirm Execution",
-                  description: "Set to true to allow this SQL statement to run"
+          return confirmStatementExecutionWithFallback({
+            database,
+            input,
+            pendingConfirmations: pendingStatementConfirmations,
+            supportsInteractiveConfirmation: Boolean(clientCapabilities?.elicitation),
+            maxPendingConfirmations: MAX_PENDING_STATEMENT_CONFIRMATIONS,
+            elicitConfirmation: async (message) => {
+              const confirmation = await server.elicitInput({
+                mode: "form",
+                message,
+                requestedSchema: {
+                  type: "object",
+                  properties: {
+                    confirm: {
+                      type: "boolean",
+                      title: "Confirm Execution",
+                      description: "Set to true to allow this SQL statement to run"
+                    }
+                  },
+                  required: ["confirm"]
                 }
-              },
-              required: ["confirm"]
+              });
+
+              log("info", "Write statement waiting for interactive confirmation", {
+                toolName: "execute_statement",
+                databaseKey: input.databaseKey,
+                sql: input.sql,
+                params: input.params ?? [],
+                confirmationMode: "interactive"
+              });
+
+              return confirmation.action === "accept" && confirmation.content?.confirm === true;
             }
           });
-
-          const confirmed = confirmation.action === "accept" && confirmation.content?.confirm === true;
-          if (!confirmed) {
-            throw new ApplicationError("NOT_SUPPORTED", "Write SQL execution was not confirmed");
-          }
-
-          return { status: "confirmed" } as const;
         }
+      });
+
+      log("info", "Tool execution succeeded", {
+        toolName: tool.name,
+        result: summarizeToolResult(result)
       });
 
       return {
@@ -411,5 +387,214 @@ function extractSqlTargetObject(statementKeyword: string, sql: string): string {
 }
 
 function createConfirmationId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return randomUUID();
+}
+
+function cleanupExpiredConfirmations(
+  pendingConfirmations: Map<string, PendingStatementConfirmation>,
+  now: number
+): void {
+  for (const [confirmationId, pending] of pendingConfirmations.entries()) {
+    if (pending.expiresAt <= now) {
+      pendingConfirmations.delete(confirmationId);
+    }
+  }
+}
+
+function buildInteractiveConfirmationMessage(input: StatementConfirmationInput): string {
+  const statement = inspectSqlStatement(input.sql);
+  const previewSql = buildSqlPreview(input.sql);
+  const previewParams = buildParamsPreview(input.params);
+  const targetObject = extractSqlTargetObject(statement.firstKeyword, input.sql);
+  const riskSummary = buildRiskSummary(statement.riskLevel, statement.riskReasons);
+
+  return (
+    `Manual confirmation required before executing write SQL.\n` +
+    `Database Key: ${input.databaseKey}\n` +
+    `Statement: ${statement.firstKeyword}\n` +
+    `Target: ${targetObject}\n` +
+    `Risk: ${statement.riskLevel.toUpperCase()}\n` +
+    `Risk Details: ${riskSummary}\n` +
+    `SQL Preview: ${previewSql}\n` +
+    `Params: ${previewParams}`
+  );
+}
+
+export async function confirmStatementExecutionWithFallback(
+  context: StatementConfirmationContext
+): Promise<StatementConfirmationResult> {
+  const {
+    database,
+    input,
+    pendingConfirmations,
+    supportsInteractiveConfirmation,
+    elicitConfirmation,
+    now = () => Date.now(),
+    createId = createConfirmationId,
+    maxPendingConfirmations = MAX_PENDING_STATEMENT_CONFIRMATIONS
+  } = context;
+
+  if (database.type === "redis") {
+    throw new ApplicationError("NOT_SUPPORTED", "Redis does not support SQL statement execution");
+  }
+
+  if (database.readonly) {
+    throw new ApplicationError("NOT_SUPPORTED", `${input.databaseKey} is configured as readonly`);
+  }
+
+  const statement = inspectSqlStatement(input.sql);
+  if (statement.isReadonlyQuery) {
+    throw new ApplicationError("INVALID_ARGUMENT", "Use execute_query for query SQL");
+  }
+
+  const previewSql = buildSqlPreview(input.sql);
+  const previewParams = buildParamsPreview(input.params);
+  const targetObject = extractSqlTargetObject(statement.firstKeyword, input.sql);
+  const riskSummary = buildRiskSummary(statement.riskLevel, statement.riskReasons);
+
+  cleanupExpiredConfirmations(pendingConfirmations, now());
+
+  if (supportsInteractiveConfirmation && elicitConfirmation) {
+    try {
+      const confirmed = await elicitConfirmation(buildInteractiveConfirmationMessage(input));
+      if (!confirmed) {
+        throw new ApplicationError("NOT_SUPPORTED", "Write SQL execution was not confirmed");
+      }
+
+      log("info", "Write statement confirmed through interactive confirmation", {
+        toolName: "execute_statement",
+        databaseKey: input.databaseKey,
+        sql: input.sql,
+        params: input.params ?? [],
+        confirmationMode: "interactive"
+      });
+
+      return { status: "confirmed" };
+    } catch (error) {
+      if (error instanceof ApplicationError) {
+        throw error;
+      }
+      log("warn", "Interactive confirmation failed; falling back to two-step confirmation", {
+        toolName: "execute_statement",
+        databaseKey: input.databaseKey,
+        sql: input.sql,
+        params: input.params ?? [],
+        reason: error instanceof Error ? error.message : String(error)
+      });
+      // Fall back to two-step confirmation when the host claims support but the request fails.
+    }
+  }
+
+  if (input.confirmationId && input.confirmExecution === true) {
+    const pending = pendingConfirmations.get(input.confirmationId);
+    if (!pending) {
+      throw new ApplicationError(
+        "INVALID_ARGUMENT",
+        "Unknown or expired confirmationId for execute_statement"
+      );
+    }
+
+    if (
+      pending.databaseKey !== input.databaseKey ||
+      pending.sql !== input.sql ||
+      JSON.stringify(pending.params ?? []) !== JSON.stringify(input.params ?? [])
+    ) {
+      throw new ApplicationError(
+        "INVALID_ARGUMENT",
+        "execute_statement confirmation does not match the pending SQL request"
+      );
+    }
+
+    pendingConfirmations.delete(input.confirmationId);
+    log("info", "Write statement confirmed through two-step confirmation", {
+      toolName: "execute_statement",
+      databaseKey: input.databaseKey,
+      sql: input.sql,
+      params: input.params ?? [],
+      confirmationMode: "two_step",
+      confirmationId: input.confirmationId
+    });
+    return { status: "confirmed" };
+  }
+
+  if (pendingConfirmations.size >= maxPendingConfirmations) {
+    throw new ApplicationError(
+      "TIMEOUT",
+      "Too many pending write confirmations. Confirm or wait for existing requests to expire before creating a new one."
+    );
+  }
+
+  const confirmationId = createId();
+  pendingConfirmations.set(confirmationId, {
+    databaseKey: input.databaseKey,
+    sql: input.sql,
+    params: input.params,
+    expiresAt: now() + PENDING_CONFIRMATION_TTL_MS
+  });
+
+  log("info", "Write statement waiting for two-step confirmation", {
+    toolName: "execute_statement",
+    databaseKey: input.databaseKey,
+    sql: input.sql,
+    params: input.params ?? [],
+    confirmationMode: "two_step",
+    confirmationId,
+    riskLevel: statement.riskLevel
+  });
+
+  return {
+    status: "pending",
+    confirmationId,
+    confirmationMode: "two_step",
+    message:
+      "This MCP client does not support interactive confirmation. Ask the user whether to execute the statement, then call execute_statement again with the same databaseKey, sql, params, confirmationId, and confirmExecution=true.",
+    statement: statement.firstKeyword,
+    targetObject,
+    riskLevel: statement.riskLevel,
+    riskDetails: riskSummary,
+    sqlPreview: previewSql,
+    paramsPreview: previewParams
+  };
+}
+
+function summarizeToolArguments(args: unknown): Record<string, unknown> {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return {};
+  }
+
+  const objectArgs = args as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(objectArgs)) {
+    if (key === "sql" && typeof value === "string") {
+      summary.sql = value;
+      continue;
+    }
+
+    if (key === "params") {
+      summary.params = value;
+      continue;
+    }
+
+    summary[key] = value;
+  }
+
+  return summary;
+}
+
+function summarizeToolResult(result: unknown): Record<string, unknown> {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return {};
+  }
+
+  const value = result as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+
+  for (const key of ["databaseKey", "type", "rowCount", "truncated", "command", "affectedRows", "status", "confirmationMode", "confirmationId", "riskLevel"]) {
+    if (key in value) {
+      summary[key] = value[key];
+    }
+  }
+
+  return summary;
 }

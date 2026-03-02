@@ -45,6 +45,7 @@ sh ./scripts/install-global.sh
 
 ## Features
 - Multiple named database targets in a single config file
+- Optional file logging with configurable output directory
 - Manual config reload without restarting the MCP server
 - Automatic config reload when the JSON file changes on disk
 - Strict read-only enforcement for query tools
@@ -59,25 +60,32 @@ Provide the config path by one of these methods:
 1. `node dist/index.js --config ./config/databases.json`
 2. Set `MCP_DATABASE_CONFIG=/absolute/path/to/databases.json`
 
-The configuration file must be a JSON array. Example:
+The configuration file must be a JSON object with a top-level `databases` array. Example:
 
 ```json
-[
-  {
-    "key": "main-mysql",
-    "type": "mysql",
-    "readonly": true,
-    "connection": {
-      "host": "127.0.0.1",
-      "port": 3306,
-      "databaseName": "app_db",
-      "user": "root",
-      "password": "secret",
-      "connectTimeoutMs": 5000
+{
+  "logging": {
+    "enabled": false
+  },
+  "databases": [
+    {
+      "key": "main-mysql",
+      "type": "mysql",
+      "readonly": true,
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "databaseName": "app_db",
+        "user": "root",
+        "password": "secret",
+        "connectTimeoutMs": 5000
+      }
     }
-  }
-]
+  ]
+}
 ```
+
+`logging.enabled` defaults to `false`. When enabled, logs are written to the system temporary directory by default. You can override that with `logging.directory`, and relative paths are resolved relative to the config file location.
 
 Oracle supports both Thin and Thick mode. Thick mode uses the same `oracledb` package, but requires Oracle Instant Client on the host machine. Example:
 
@@ -189,6 +197,7 @@ Example MCP server configuration:
 - You can still use `reload_config` to force a manual reload without restarting the process.
 - Reload is atomic: if the new file is invalid, the old in-memory configuration remains active.
 - `show_loaded_config` can be used to inspect the current config path, load time, and configured database targets.
+- `show_loaded_config` also includes the current logging status and resolved log directory.
 - `show_loaded_config` also includes a sanitized connection summary for each target, such as host, port, databaseName or serviceName, user name, and Oracle client mode, but it never exposes passwords.
 
 ## Oracle Notes
