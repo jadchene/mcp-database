@@ -1,6 +1,10 @@
 {
   "logging": {
-    "enabled": false
+    "enabled": true,
+    "directory": "./logs"
+  },
+  "query": {
+    "timeoutMs": 5000
   },
   "databases": [
     {

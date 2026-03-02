@@ -30,9 +30,14 @@ type ExecuteStatementRawResult = {
  */
 export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
   public readonly config: MysqlDatabaseConfig | OracleDatabaseConfig | PostgresDatabaseConfig;
+  protected readonly queryTimeoutMs: number | null;
 
-  protected constructor(config: MysqlDatabaseConfig | OracleDatabaseConfig | PostgresDatabaseConfig) {
+  protected constructor(
+    config: MysqlDatabaseConfig | OracleDatabaseConfig | PostgresDatabaseConfig,
+    queryTimeoutMs: number | null
+  ) {
     this.config = config;
+    this.queryTimeoutMs = queryTimeoutMs;
   }
 
   public abstract connect(): Promise<void>;
@@ -83,7 +88,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
       databaseKey: this.config.key,
       sql: this.pingSql()
     });
-    await this.executeRaw(this.pingSql());
+    await this.runWithTimeout("ping_database", this.pingSql(), [], () => this.executeRaw(this.pingSql()));
     return {
       ok: true,
       latencyMs: Date.now() - startedAt
@@ -97,7 +102,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
       operation: "listSchemas",
       sql
     });
-    const rows = await this.executeRaw(sql);
+    const rows = await this.runWithTimeout("list_schemas", sql, [], () => this.executeRaw(sql));
     return rows.map((row) => ({
       schema: String(row.schema ?? row.SCHEMA ?? row.SCHEMA_NAME ?? row.USERNAME)
     }));
@@ -111,7 +116,9 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
       sql: query.sql,
       params: query.params ?? []
     });
-    const rows = await this.executeRaw(query.sql, query.params);
+    const rows = await this.runWithTimeout("list_tables", query.sql, query.params, () =>
+      this.executeRaw(query.sql, query.params)
+    );
     return rows.map((row) => ({
       schema: String(
         row.schema ??
@@ -141,7 +148,9 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
       sql: query.sql,
       params: query.params ?? []
     });
-    const rows = await this.executeRaw(query.sql, query.params);
+    const rows = await this.runWithTimeout("describe_table", query.sql, query.params, () =>
+      this.executeRaw(query.sql, query.params)
+    );
     return rows.map((row) => ({
       name: String(row.name ?? row.NAME ?? row.column_name ?? row.COLUMN_NAME),
       dataType: String(row.dataType ?? row.datatype ?? row.DATATYPE ?? row.data_type ?? row.DATA_TYPE),
@@ -183,7 +192,9 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
       sql: query.sql,
       params: query.params ?? []
     });
-    const rows = await this.executeRaw(query.sql, query.params);
+    const rows = await this.runWithTimeout("list_indexes", query.sql, query.params, () =>
+      this.executeRaw(query.sql, query.params)
+    );
     return rows.map((row) => ({
       schema: String(
         row.schema ??
@@ -260,7 +271,11 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
       sql: query.sql,
       params: query.params ?? []
     });
-    const rows = normalizeRows(await this.executeRaw(query.sql, query.params));
+    const rows = normalizeRows(
+      await this.runWithTimeout("get_table_statistics", query.sql, query.params, () =>
+        this.executeRaw(query.sql, query.params)
+      )
+    );
     if (rows.length === 0) {
       return null;
     }
@@ -288,7 +303,9 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         params: params ?? [],
         maxRows
       });
-      const rows = await this.explainQueryRows(sql, params);
+      const rows = await this.runWithTimeout("explain_query", sql, params, () =>
+        this.explainQueryRows(sql, params)
+      );
       const normalizedRows = normalizeRows(rows);
       const limitedRows = normalizedRows.slice(0, maxRows);
 
@@ -315,7 +332,9 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         params: params ?? [],
         maxRows
       });
-      const rows = await this.analyzeQueryRows(sql, params);
+      const rows = await this.runWithTimeout("analyze_query", sql, params, () =>
+        this.analyzeQueryRows(sql, params)
+      );
       const normalizedRows = normalizeRows(rows);
       const limitedRows = normalizedRows.slice(0, maxRows);
 
@@ -338,7 +357,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         params: params ?? [],
         maxRows
       });
-      const rows = await this.executeRaw(sql, params);
+      const rows = await this.runWithTimeout("execute_query", sql, params, () => this.executeRaw(sql, params));
       const normalizedRows = normalizeRows(rows);
       const limitedRows = normalizedRows.slice(0, maxRows);
 
@@ -364,7 +383,9 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         sql,
         params: params ?? []
       });
-      const result = await this.executeStatementRaw(sql, params);
+      const result = await this.runWithTimeout("execute_statement", sql, params, () =>
+        this.executeStatementRaw(sql, params)
+      );
       return {
         command: info.firstKeyword,
         affectedRows: result.affectedRows
@@ -372,5 +393,41 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     } catch (error) {
       throw toApplicationError(error, "QUERY_ERROR");
     }
+  }
+
+  private async runWithTimeout<T>(
+    operation: string,
+    sql: string,
+    params: unknown[] | Record<string, unknown> | undefined,
+    action: () => Promise<T>
+  ): Promise<T> {
+    const timeoutMs = this.queryTimeoutMs;
+    if (!timeoutMs) {
+      return action();
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(
+          new ApplicationError("TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
+            operation,
+            databaseKey: this.config.key,
+            sql,
+            params: params ?? [],
+            timeoutMs
+          })
+        );
+      }, timeoutMs);
+
+      void action()
+        .then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+    });
   }
 }

@@ -6,7 +6,7 @@ import { PostgresAdapter } from "./postgresClient.js";
  * protocol differences appear in the future, they can be isolated here.
  */
 export class OpenGaussAdapter extends PostgresAdapter {
-  public constructor(config: PostgresDatabaseConfig) {
-    super(config);
+  public constructor(config: PostgresDatabaseConfig, queryTimeoutMs: number | null) {
+    super(config, queryTimeoutMs);
   }
 }

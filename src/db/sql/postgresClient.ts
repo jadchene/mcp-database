@@ -7,8 +7,8 @@ import { BaseSqlAdapter } from "./baseSqlAdapter.js";
 export class PostgresAdapter extends BaseSqlAdapter {
   private client: Client | null = null;
 
-  public constructor(private readonly postgresConfig: PostgresDatabaseConfig) {
-    super(postgresConfig);
+  public constructor(private readonly postgresConfig: PostgresDatabaseConfig, queryTimeoutMs: number | null) {
+    super(postgresConfig, queryTimeoutMs);
   }
 
   public override async connect(): Promise<void> {
@@ -27,6 +27,10 @@ export class PostgresAdapter extends BaseSqlAdapter {
 
       if (this.postgresConfig.readonly) {
         await this.client.query("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY");
+      }
+
+      if (this.queryTimeoutMs) {
+        await this.client.query(`SET statement_timeout = ${this.queryTimeoutMs}`);
       }
     } catch (error) {
       throw toApplicationError(error, "CONNECTION_ERROR");

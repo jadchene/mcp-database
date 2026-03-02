@@ -11,18 +11,23 @@ import type { DatabaseAdapter } from "./types.js";
  * Adapters are created per request so each tool call owns its own connection
  * lifecycle and can clean up independently.
  */
-export function createClient(config: DatabaseConfig): DatabaseAdapter {
+export function createClient(
+  config: DatabaseConfig,
+  options?: {
+    queryTimeoutMs?: number | null;
+  }
+): DatabaseAdapter {
   switch (config.type) {
     case "mysql":
-      return new MysqlAdapter(config);
+      return new MysqlAdapter(config, options?.queryTimeoutMs ?? null);
     case "oracle":
-      return new OracleAdapter(config);
+      return new OracleAdapter(config, options?.queryTimeoutMs ?? null);
     case "postgresql":
-      return new PostgresAdapter(config);
+      return new PostgresAdapter(config, options?.queryTimeoutMs ?? null);
     case "opengauss":
-      return new OpenGaussAdapter(config);
+      return new OpenGaussAdapter(config, options?.queryTimeoutMs ?? null);
     case "redis":
-      return new RedisAdapter(config);
+      return new RedisAdapter(config, options?.queryTimeoutMs ?? null);
     default:
       throw new ApplicationError("UNSUPPORTED_DATABASE_TYPE", `Unsupported database type: ${(config as DatabaseConfig).type}`);
   }

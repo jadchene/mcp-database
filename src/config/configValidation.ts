@@ -115,7 +115,12 @@ const rootConfigSchema = z.object({
     })
     .default({
       enabled: false
+    }),
+  query: z
+    .object({
+      timeoutMs: z.number().int().positive().optional()
     })
+    .default({})
 }).strict();
 
 /**
@@ -144,6 +149,9 @@ export function validateDatabaseConfig(rawConfig: unknown): RootConfig {
     logging: {
       enabled: parsed.data.logging.enabled,
       directory: parsed.data.logging.directory
+    },
+    query: {
+      timeoutMs: parsed.data.query.timeoutMs
     }
   };
 }

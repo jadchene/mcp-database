@@ -5,8 +5,8 @@ import { BaseSqlAdapter } from "./baseSqlAdapter.js";
 export class OracleAdapter extends BaseSqlAdapter {
   private connection: { close(): Promise<void>; execute: (...args: unknown[]) => Promise<{ rows?: unknown[] }> } | null = null;
 
-  public constructor(private readonly oracleConfig: OracleDatabaseConfig) {
-    super(oracleConfig);
+  public constructor(private readonly oracleConfig: OracleDatabaseConfig, queryTimeoutMs: number | null) {
+    super(oracleConfig, queryTimeoutMs);
   }
 
   public override async connect(): Promise<void> {

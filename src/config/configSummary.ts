@@ -18,6 +18,9 @@ export function summarizeLoadedConfig(config: LoadedConfig): Record<string, unkn
       enabled: config.logging.enabled,
       directory: config.logging.directory
     },
+    query: {
+      timeoutMs: config.query.timeoutMs
+    },
     items: config.databases.map((database) => summarizeDatabaseConfig(database))
   };
 }

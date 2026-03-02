@@ -78,7 +78,9 @@ async function withDatabaseAdapter<T>(
     throw new ApplicationError("NOT_SUPPORTED", `${databaseKey} is not a Redis target`);
   }
 
-  const adapter = createClient(database);
+  const adapter = createClient(database, {
+    queryTimeoutMs: config.query.timeoutMs
+  });
   const startedAt = Date.now();
 
   try {

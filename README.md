@@ -65,7 +65,11 @@ The configuration file must be a JSON object with a top-level `databases` array.
 ```json
 {
   "logging": {
-    "enabled": false
+    "enabled": true,
+    "directory": "./logs"
+  },
+  "query": {
+    "timeoutMs": 5000
   },
   "databases": [
     {
@@ -85,7 +89,9 @@ The configuration file must be a JSON object with a top-level `databases` array.
 }
 ```
 
-`logging.enabled` defaults to `false`. When enabled, logs are written to the system temporary directory by default. You can override that with `logging.directory`, and relative paths are resolved relative to the config file location.
+`logging.enabled` defaults to `false`. When enabled, logs are written to the system temporary directory by default. You can override that with `logging.directory`, and relative paths are resolved relative to the config file location. In the example above, logs are written under `./logs`.
+
+`query.timeoutMs` is optional. When set, the server applies a query timeout to database operations. In the example above, queries time out after `5000` milliseconds.
 
 Oracle supports both Thin and Thick mode. Thick mode uses the same `oracledb` package, but requires Oracle Instant Client on the host machine. Example:
 
@@ -197,7 +203,7 @@ Example MCP server configuration:
 - You can still use `reload_config` to force a manual reload without restarting the process.
 - Reload is atomic: if the new file is invalid, the old in-memory configuration remains active.
 - `show_loaded_config` can be used to inspect the current config path, load time, and configured database targets.
-- `show_loaded_config` also includes the current logging status and resolved log directory.
+- `show_loaded_config` also includes the current logging status, resolved log directory, and configured query timeout.
 - `show_loaded_config` also includes a sanitized connection summary for each target, such as host, port, databaseName or serviceName, user name, and Oracle client mode, but it never exposes passwords.
 
 ## Oracle Notes

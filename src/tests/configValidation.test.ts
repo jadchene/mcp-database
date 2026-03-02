@@ -9,6 +9,9 @@ test("config validation accepts a valid mysql entry", () => {
     logging: {
       enabled: false
     },
+    query: {
+      timeoutMs: 5000
+    },
     databases: [
       {
         key: "main-mysql",
@@ -25,6 +28,7 @@ test("config validation accepts a valid mysql entry", () => {
   });
 
   assert.equal(result.logging.enabled, false);
+  assert.equal(result.query.timeoutMs, 5000);
   assert.equal(result.databases.length, 1);
   assert.equal(result.databases[0]?.key, "main-mysql");
 });
@@ -35,6 +39,9 @@ test("config validation rejects duplicate names", () => {
       validateDatabaseConfig({
         logging: {
           enabled: false
+        },
+        query: {
+          timeoutMs: 5000
         },
         databases: [
           {
@@ -78,4 +85,5 @@ test("config validation defaults logging to disabled when omitted", () => {
   });
 
   assert.equal(result.logging.enabled, false);
+  assert.equal(result.query.timeoutMs, undefined);
 });

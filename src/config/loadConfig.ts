@@ -62,6 +62,9 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
       enabled: validatedConfig.logging.enabled,
       directory: loggingDirectory
     },
+    query: {
+      timeoutMs: validatedConfig.query.timeoutMs ?? null
+    },
     databases: databases.map((item) => ({
       key: item.key,
       type: item.type,
@@ -77,6 +80,9 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
     logging: {
       enabled: validatedConfig.logging.enabled,
       directory: loggingDirectory
+    },
+    query: {
+      timeoutMs: validatedConfig.query.timeoutMs ?? null
     }
   };
 }

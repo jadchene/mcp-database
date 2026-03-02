@@ -71,9 +71,14 @@ export interface LoggingConfig {
   directory?: string;
 }
 
+export interface QueryConfig {
+  timeoutMs?: number;
+}
+
 export interface RootConfig {
   databases: DatabaseConfig[];
   logging: LoggingConfig;
+  query: QueryConfig;
 }
 
 export interface LoadedConfig {
@@ -83,5 +88,8 @@ export interface LoadedConfig {
   databaseMap: Map<string, DatabaseConfig>;
   logging: LoggingConfig & {
     directory: string;
+  };
+  query: {
+    timeoutMs: number | null;
   };
 }

@@ -16,6 +16,9 @@ async function main() {
     logging: {
       enabled: true
     },
+    query: {
+      timeoutMs: 3000
+    },
     databases: [
       {
         key: "mysql-alpha",
@@ -37,6 +40,9 @@ async function main() {
       enabled: true,
       directory: "./logs"
     },
+    query: {
+      timeoutMs: 4500
+    },
     databases: [
       ...initialConfig.databases,
       {
@@ -53,6 +59,9 @@ async function main() {
   const manualReloadConfig = {
     logging: {
       enabled: false
+    },
+    query: {
+      timeoutMs: 2000
     },
     databases: [
       {
@@ -97,6 +106,7 @@ async function main() {
     const initialSummary = await callJsonTool(client, "show_loaded_config", {});
     assert.equal(initialSummary.databaseCount, 1);
     assert.equal(initialSummary.logging?.enabled, true);
+    assert.equal(initialSummary.query?.timeoutMs, 3000);
     assert.equal(initialSummary.items[0]?.key, "mysql-alpha");
     assert.equal(initialSummary.items[0]?.connection?.databaseName, "alpha_db");
 
@@ -104,6 +114,7 @@ async function main() {
     const watchedSummary = await waitForConfig(client, (summary) => summary.databaseCount === 2);
     assert.equal(watchedSummary.logging?.enabled, true);
     assert.match(String(watchedSummary.logging?.directory), /logs/i);
+    assert.equal(watchedSummary.query?.timeoutMs, 4500);
     assert.equal(watchedSummary.items[1]?.key, "redis-beta");
     assert.match(String(watchedSummary.items[1]?.connection?.url), /\*\*\*/);
 
@@ -117,6 +128,7 @@ async function main() {
     const manualSummary = await callJsonTool(client, "reload_config", {});
     assert.equal(manualSummary.databaseCount, 1);
     assert.equal(manualSummary.logging?.enabled, false);
+    assert.equal(manualSummary.query?.timeoutMs, 2000);
     assert.equal(manualSummary.items[0]?.key, "oracle-gamma");
     assert.equal(manualSummary.items[0]?.connection?.serviceName, "XEPDB1");
   } finally {
@@ -132,6 +144,7 @@ async function main() {
       "show_loaded_config initial snapshot",
       "automatic config reload after valid file change",
       "logging summary in show_loaded_config",
+      "query timeout summary in show_loaded_config",
       "sanitized connection summary in show_loaded_config",
       "invalid auto-reload keeps previous in-memory config",
       "manual reload_config replaces in-memory config"

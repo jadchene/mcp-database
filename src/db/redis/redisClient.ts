@@ -7,11 +7,13 @@ import type { RedisDatabaseAdapter } from "../types.js";
 
 export class RedisAdapter implements RedisDatabaseAdapter {
   public readonly config: RedisDatabaseConfig;
+  private readonly queryTimeoutMs: number | null;
 
   private client: RedisClientType | null = null;
 
-  public constructor(config: RedisDatabaseConfig) {
+  public constructor(config: RedisDatabaseConfig, queryTimeoutMs: number | null) {
     this.config = config;
+    this.queryTimeoutMs = queryTimeoutMs;
   }
 
   public async connect(): Promise<void> {
@@ -35,7 +37,7 @@ export class RedisAdapter implements RedisDatabaseAdapter {
             password: this.config.connection.password
           });
 
-      await this.client.connect();
+      await this.withTimeout("redis_connect", { operation: "connect" }, () => this.client!.connect());
     } catch (error) {
       throw toApplicationError(error, "CONNECTION_ERROR");
     }
@@ -56,7 +58,7 @@ export class RedisAdapter implements RedisDatabaseAdapter {
     }
 
     const startedAt = Date.now();
-    await this.client.ping();
+    await this.withTimeout("redis_ping", { operation: "ping" }, () => this.client!.ping());
     return {
       ok: true,
       latencyMs: Date.now() - startedAt
@@ -68,7 +70,7 @@ export class RedisAdapter implements RedisDatabaseAdapter {
       throw new ApplicationError("CONNECTION_ERROR", "Redis connection is not open");
     }
 
-    return this.client.get(key);
+    return this.withTimeout("redis_get", { key }, () => this.client!.get(key));
   }
 
   public async hgetall(key: string): Promise<Record<string, string>> {
@@ -76,7 +78,7 @@ export class RedisAdapter implements RedisDatabaseAdapter {
       throw new ApplicationError("CONNECTION_ERROR", "Redis connection is not open");
     }
 
-    return this.client.hGetAll(key);
+    return this.withTimeout("redis_hgetall", { key }, () => this.client!.hGetAll(key));
   }
 
   public async scan(cursor: string, pattern: string | undefined, count: number): Promise<RedisScanResult> {
@@ -89,11 +91,43 @@ export class RedisAdapter implements RedisDatabaseAdapter {
       options.MATCH = pattern;
     }
 
-    const result = await this.client.scan(cursor, options);
+    const result = await this.withTimeout("redis_scan", { cursor, pattern: pattern ?? null, count }, () =>
+      this.client!.scan(cursor, options)
+    );
 
     return {
       nextCursor: result.cursor,
       keys: result.keys
     };
+  }
+
+  private async withTimeout<T>(operation: string, details: Record<string, unknown>, action: () => Promise<T>): Promise<T> {
+    const timeoutMs = this.queryTimeoutMs;
+    if (!timeoutMs) {
+      return action();
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(
+          new ApplicationError("TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
+            operation,
+            databaseKey: this.config.key,
+            timeoutMs,
+            ...details
+          })
+        );
+      }, timeoutMs);
+
+      void action()
+        .then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+    });
   }
 }

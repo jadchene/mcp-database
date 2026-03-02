@@ -65,7 +65,11 @@ sh ./scripts/install-global.sh
 ```json
 {
   "logging": {
-    "enabled": false
+    "enabled": true,
+    "directory": "./logs"
+  },
+  "query": {
+    "timeoutMs": 5000
   },
   "databases": [
     {
@@ -85,7 +89,9 @@ sh ./scripts/install-global.sh
 }
 ```
 
-`logging.enabled` 默认是 `false`。开启后，日志默认写入系统临时目录；你也可以通过 `logging.directory` 自定义目录，若填相对路径，则相对于配置文件所在目录解析。
+`logging.enabled` 默认是 `false`。开启后，日志默认写入系统临时目录；你也可以通过 `logging.directory` 自定义目录，若填相对路径，则相对于配置文件所在目录解析。上面的示例会把日志写到 `./logs`。
+
+`query.timeoutMs` 是可选项。配置后，服务会为数据库操作应用查询超时。上面的示例会在 `5000` 毫秒后超时。
 
 Oracle 同时支持 Thin 和 Thick 模式。Thick 模式仍然使用同一个 `oracledb` 包，但要求宿主机安装 Oracle Instant Client。示例：
 
@@ -197,7 +203,7 @@ MCP 服务配置示例：
 - 你仍然可以使用 `reload_config` 手动刷新，而无需重启进程
 - 刷新是原子的：如果新文件无效，旧的内存配置会继续保持生效
 - 可以用 `show_loaded_config` 查看当前配置路径、加载时间和已配置数据库目标
-- `show_loaded_config` 也会返回当前日志开关状态和解析后的日志目录
+- `show_loaded_config` 也会返回当前日志开关状态、解析后的日志目录以及配置的查询超时
 - `show_loaded_config` 还会返回脱敏后的连接摘要，例如 host、port、databaseName 或 serviceName、用户名以及 Oracle client mode，但不会暴露密码
 
 ## Oracle 说明

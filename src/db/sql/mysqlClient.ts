@@ -7,8 +7,8 @@ import { BaseSqlAdapter } from "./baseSqlAdapter.js";
 export class MysqlAdapter extends BaseSqlAdapter {
   private connection: Connection | null = null;
 
-  public constructor(private readonly mysqlConfig: MysqlDatabaseConfig) {
-    super(mysqlConfig);
+  public constructor(private readonly mysqlConfig: MysqlDatabaseConfig, queryTimeoutMs: number | null) {
+    super(mysqlConfig, queryTimeoutMs);
   }
 
   public override async connect(): Promise<void> {
@@ -32,6 +32,10 @@ export class MysqlAdapter extends BaseSqlAdapter {
 
       if (this.mysqlConfig.readonly) {
         await this.connection.query("SET SESSION TRANSACTION READ ONLY");
+      }
+
+      if (this.queryTimeoutMs) {
+        await this.connection.query("SET SESSION MAX_EXECUTION_TIME = ?", [this.queryTimeoutMs]);
       }
     } catch (error) {
       throw toApplicationError(error, "CONNECTION_ERROR");
