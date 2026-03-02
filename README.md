@@ -22,6 +22,10 @@ Or install globally:
 pwsh -File .\scripts\install-global.ps1
 ```
 
+```bash
+sh ./scripts/install-global.sh
+```
+
 ## Support Matrix
 
 | Database | Query Tools | Metadata Tools | `explain_query` | `analyze_query` | Write Support |
@@ -132,7 +136,13 @@ Recommended options:
 pwsh -File .\scripts\install-global.ps1
 ```
 
-The helper script installs dependencies, builds the project, creates a tarball with `npm pack`, installs that tarball globally with `npm install -g <tarball>`, and then deletes the temporary tarball. It does not use `npm link`.
+Or on Linux/macOS:
+
+```bash
+sh ./scripts/install-global.sh
+```
+
+The helper scripts install dependencies, build the project, create a tarball with `npm pack`, install that tarball globally with `npm install -g <tarball>`, and then delete the temporary tarball. They do not use `npm link`.
 
 2. Or install the packed tarball manually:
 

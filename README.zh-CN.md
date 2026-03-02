@@ -22,6 +22,10 @@ node dist/index.js --config ./config/databases.example.json
 pwsh -File .\scripts\install-global.ps1
 ```
 
+```bash
+sh ./scripts/install-global.sh
+```
+
 ## 支持矩阵
 
 | 数据库 | 查询工具 | 元数据工具 | `explain_query` | `analyze_query` | 写操作支持 |
@@ -132,7 +136,13 @@ node dist/index.js --config ./config/databases.example.json
 pwsh -File .\scripts\install-global.ps1
 ```
 
-该脚本会安装依赖、构建项目、通过 `npm pack` 生成 tarball、再用 `npm install -g <tarball>` 全局安装，最后删除临时 tarball。它不会使用 `npm link`。
+Linux / macOS 可使用：
+
+```bash
+sh ./scripts/install-global.sh
+```
+
+这些脚本会安装依赖、构建项目、通过 `npm pack` 生成 tarball、再用 `npm install -g <tarball>` 全局安装，最后删除临时 tarball。它们不会使用 `npm link`。
 
 2. 或手动安装打包产物：
 
