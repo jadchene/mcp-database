@@ -234,7 +234,7 @@ args = ["--config", "./config/databases.json"]
 
 ### Gemini CLI
 
-`settings.json`
+`~/.gemini/settings.json`
 
 ```json
 {
@@ -253,7 +253,7 @@ args = ["--config", "./config/databases.json"]
 
 ### Claude Code
 
-`.claude.json`
+`~/.claude.json`
 
 ```json
 {
