@@ -218,6 +218,58 @@ MCP 服务配置示例：
 }
 ```
 
+## MCP 客户端配置
+
+下面的示例展示了如何在常见 AI 客户端中注册本 MCP 服务。请将配置文件路径替换为你自己的本地路径。为了保持配置可移植，以下示例刻意避免使用绝对路径。
+
+### Codex
+
+`~/.codex/config.toml`
+
+```toml
+[mcp_servers.database]
+command = "mcp-database-service"
+args = ["--config", "./config/databases.json"]
+```
+
+### Gemini CLI
+
+`~/.gemini/settings.json`
+
+```json
+{
+  "mcpServers": {
+    "database": {
+      "type": "stdio",
+      "command": "mcp-database-service",
+      "args": [
+        "--config",
+        "./config/databases.json"
+      ]
+    }
+  }
+}
+```
+
+### Claude Code
+
+`~/.claude.json`
+
+```json
+{
+  "mcpServers": {
+    "database": {
+      "type": "stdio",
+      "command": "mcp-database-service",
+      "args": [
+        "--config",
+        "./config/databases.json"
+      ]
+    }
+  }
+}
+```
+
 ## 配置刷新
 
 - 服务启动时会加载 JSON 配置文件，并保留一份校验通过的内存快照
