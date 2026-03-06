@@ -34,7 +34,6 @@ node dist/index.js --config ./config/databases.example.json
   - 统一数据库发现与表结构检查流程
   - 默认查询优先，结果规模与列选择更安全
   - 写操作遵循清晰的两步确认纪律
-  - 与 SQL 性能排查工作流配合更稳定
 
 若你的 AI 客户端支持 Skills，建议在调用 database MCP 工具前先加载该 skill。
 

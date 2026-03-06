@@ -10,7 +10,6 @@ Use the database MCP service proactively for database-related work.
 ## Scope
 
 - Use this skill for routine database tasks such as querying data, inspecting schemas, locating database names from project config, preparing SQL, reading Redis keys, and handling write-safety confirmation flow.
-- If the task is specifically about slow SQL, index strategy, execution plans, lock contention, or large-update rewrite strategy, use `sql-performance-optimizer` together with this skill.
 
 ## Required workflow
 
@@ -42,6 +41,4 @@ Use the database MCP service proactively for database-related work.
 ## Database name discovery
 
 - Check Spring configuration files to locate the actual database name when needed.
-- For Smart Admin projects, check `smart-admin-api/sa-base/src/main/resources/dev/sa-base.yaml` first.
-- For RuoYi projects, check `application-druid.yml` first.
 - Ask the user directly if the database information is still unclear after checking the project config.

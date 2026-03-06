@@ -34,7 +34,6 @@ For AI assistants (Codex / Gemini / similar agents), this repository includes a 
   - Standardized database discovery and schema inspection flow
   - Query-first defaults with safer result-size and column-selection behavior
   - Clear two-step confirmation discipline for write operations
-  - Better coordination with SQL performance troubleshooting workflows
 
 When your agent supports skills, load this skill before using database MCP tools for best results.
 
