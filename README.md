@@ -2,11 +2,29 @@ English | [简体中文](./README.zh-CN.md)
 
 # MCP Database Service
 
-A multi-database MCP server for Model Context Protocol (MCP), written in TypeScript.
+MCP Database Service is a TypeScript MCP server that lets AI agents inspect and query multiple database targets through one MCP service.
 
-It supports MySQL, PostgreSQL, Oracle, openGauss, and Redis, with lazy short-lived connections, read-oriented database tools, SQL plan analysis, config reload, and guarded write execution.
+It supports MySQL, PostgreSQL, openGauss, Oracle, and Redis. SQL targets are read-only by default, connections are opened lazily for each request, and writable SQL requires explicit confirmation.
 
-This project is intended for AI agents and MCP clients that need safe database discovery, querying, performance analysis, and controlled write operations.
+## Features
+
+- Multiple named database targets in one JSON config file.
+- MySQL, PostgreSQL, openGauss, Oracle, and Redis support.
+- Read-only query tools that block write SQL.
+- Metadata tools for schemas, tables, columns, indexes, variables, locks, and sessions.
+- Static plan inspection through `explain_query`.
+- Runtime query analysis through `analyze_query` where supported.
+- Guarded non-query SQL through `execute_statement` on explicitly writable targets.
+- Manual and automatic config reload with atomic fallback to the last valid config.
+- Optional file logging with paths resolved from the config file location.
+- Lazy short-lived connections with cleanup after each request.
+
+## Why Use It
+
+- Give agents database visibility without exposing credentials or ad hoc SQL scripts in prompts.
+- Keep most database work read-only while still allowing controlled writes when a target is configured for it.
+- Use the same discovery and query workflow across different SQL engines.
+- Inspect performance and locking information before changing SQL or indexes.
 
 ## Quick Start
 
@@ -25,57 +43,27 @@ npm run build
 node dist/index.js --config ./config/databases.example.json
 ```
 
-## Skill Integration (Recommended)
+The published CLI command is:
 
-For AI assistants (Codex / Gemini / similar agents), this repository includes a database MCP skill that improves workflow consistency and write safety.
-
-- Skill path: `skills/database-mcp/SKILL.md`
-- Benefits:
-  - Standardized database discovery and schema inspection flow
-  - Query-first defaults with safer result-size and column-selection behavior
-  - Clear two-step confirmation discipline for write operations
-
-When your agent supports skills, load this skill before using database MCP tools for best results.
-
-## Support Matrix
-
-| Database | Query Tools | Metadata Tools | `explain_query` | `analyze_query` | Write Support |
-| --- | --- | --- | --- | --- | --- |
-| MySQL | Yes | Yes | Yes | Yes | Yes |
-| PostgreSQL | Yes | Yes | Yes | Yes | Yes |
-| openGauss | Yes | Yes | Yes | Yes | Yes |
-| Oracle | Yes | Yes | Yes | No | Yes |
-| Redis | Yes | Limited to Redis tools | No | No | No |
-
-Notes:
-- show_create_table currently supports MySQL and Oracle. PostgreSQL and openGauss currently return NOT_SUPPORTED.
-- Operational tools such as `show_variables`, `find_long_running_queries`, `find_blocking_sessions`, and `show_locks` depend on the visibility and privileges of the configured database account.
-
-## Supported Databases
-- MySQL
-- Oracle
-- PostgreSQL
-- openGauss (via PostgreSQL protocol compatibility)
-- Redis
-
-## Features
-- Multiple named database targets in a single config file
-- Optional file logging with configurable output directory
-- Manual config reload without restarting the MCP server
-- Automatic config reload when the JSON file changes on disk
-- Strict read-only enforcement for query tools
-- Optional write execution with explicit MCP confirmation for writable targets
-- Lazy connections with guaranteed cleanup after each request
-- Metadata discovery tools for SQL databases
-- Dedicated read tools for Redis
+```text
+mcp-database-service
+```
 
 ## Configuration
-Provide the config path by one of these methods:
 
-1. `node dist/index.js --config ./config/databases.json`
-2. Set `MCP_DATABASE_CONFIG=/absolute/path/to/databases.json`
+Pass the config file by CLI argument:
 
-The configuration file must be a JSON object with a required top-level `databases` array. Optional top-level sections such as `logging` and `query` may also be provided. Example:
+```bash
+mcp-database-service --config ./config/databases.json
+```
+
+Or by environment variable:
+
+```bash
+MCP_DATABASE_CONFIG=./config/databases.json mcp-database-service
+```
+
+Minimal SQL target example:
 
 ```json
 {
@@ -95,8 +83,8 @@ The configuration file must be a JSON object with a required top-level `database
         "host": "127.0.0.1",
         "port": 3306,
         "databaseName": "app_db",
-        "user": "root",
-        "password": "secret",
+        "user": "app_reader",
+        "password": "replace-with-password",
         "connectTimeoutMs": 5000
       }
     }
@@ -104,11 +92,113 @@ The configuration file must be a JSON object with a required top-level `database
 }
 ```
 
-`logging.enabled` defaults to `false`. When enabled, logs are written to the system temporary directory by default. You can override that with `logging.directory`, and relative paths are resolved relative to the config file location. In the example above, logs are written under `./logs`.
+`logging.enabled` defaults to `false`. When enabled, logs are written to the system temporary directory unless `logging.directory` is set. Relative log directories are resolved from the config file location.
 
-`query.timeoutMs` is optional. When set, the server applies a query timeout to database operations. In the example above, queries time out after `5000` milliseconds.
+`query.timeoutMs` is optional. When set, the server applies that timeout to database operations.
 
-Oracle supports both Thin and Thick mode. Thick mode uses the same `oracledb` package, but requires Oracle Instant Client on the host machine. Example:
+## Supported Databases
+
+| Database | Query | Metadata | `explain_query` | `analyze_query` | Writes |
+| --- | --- | --- | --- | --- | --- |
+| MySQL | Yes | Yes | Yes | Yes | Yes |
+| PostgreSQL | Yes | Yes | Yes | Yes | Yes |
+| openGauss | Yes | Yes | Yes | Yes | Yes |
+| Oracle | Yes | Yes | Yes | No | Yes |
+| Redis | Yes | Limited | No | No | No |
+
+`show_create_table` currently supports MySQL and Oracle. PostgreSQL and openGauss return `NOT_SUPPORTED`.
+
+Operational tools such as `show_variables`, `find_long_running_queries`, `find_blocking_sessions`, and `show_locks` depend on the visibility and privileges of the configured database account.
+
+## MCP Tools
+
+Configuration and discovery:
+
+| Tool | Purpose |
+| --- | --- |
+| `show_loaded_config` | Show the active config path, load time, logging state, query timeout, and sanitized connection summaries. |
+| `reload_config` | Reload the current JSON config file and replace the in-memory config only if validation succeeds. |
+| `list_databases` | List configured target keys, database names, types, and readonly flags without opening connections. |
+| `ping_database` | Test connectivity for one configured database target. |
+
+SQL metadata:
+
+| Tool | Purpose |
+| --- | --- |
+| `list_schemas` | List schemas available on one SQL target. |
+| `list_tables` | List tables and views under a schema or default schema. |
+| `list_views` | List views under a schema or default schema. |
+| `describe_table` | Inspect table columns and types before writing joins, reports, or update statements. |
+| `show_create_table` | Return database-side DDL where supported. |
+| `search_tables` | Search tables and views by partial name. |
+| `search_columns` | Search columns by partial name across a schema. |
+| `list_indexes` | Inspect indexes for one table. |
+| `get_table_statistics` | Return approximate row counts, storage metrics, or database-specific table statistics. |
+| `show_variables` | Inspect database runtime variables where supported and permitted. |
+| `find_long_running_queries` | Find currently running sessions above a duration threshold. |
+| `find_blocking_sessions` | Inspect blocking relationships between database sessions. |
+| `show_locks` | Show lock rows exposed by the database engine. |
+
+SQL execution and performance:
+
+| Tool | Purpose |
+| --- | --- |
+| `execute_query` | Run one read-only SQL query. It rejects writes and multi-statement SQL. |
+| `explain_query` | Return the static execution plan for a read-only SQL query. Pass the original SQL, not `EXPLAIN ...`. |
+| `analyze_query` | Return runtime analysis for a read-only SQL query where supported. Pass the original SQL, not `EXPLAIN ANALYZE ...`. |
+| `execute_statement` | Run one non-query SQL statement on a writable target after explicit confirmation. |
+
+Redis:
+
+| Tool | Purpose |
+| --- | --- |
+| `redis_get` | Read one Redis string key. |
+| `redis_hgetall` | Read one Redis hash key. |
+| `redis_scan` | Cursor-scan Redis keys with an optional pattern. |
+
+## Typical Workflow
+
+1. Call `list_databases` to choose a configured target.
+2. Call `list_schemas`, `search_tables`, or `list_tables` to find the relevant objects.
+3. Call `describe_table` and `list_indexes` before writing joins or optimization SQL.
+4. Use `execute_query` for read-only SQL.
+5. Use `explain_query` or `analyze_query` for performance work.
+6. Use `execute_statement` only when the target is writable and the user has approved the exact change.
+
+## Safety Model
+
+- Read tools are separated from write tools. Use `execute_query` for read-only SQL and `execute_statement` for non-query SQL.
+- `execute_query` runs through a read-only SQL guard. It rejects writes, unsupported statement types, and multi-statement SQL.
+- SQL targets are controlled by the per-target `readonly` flag. `execute_statement` is rejected when the selected target has `readonly: true`.
+- `execute_statement` accepts non-query SQL only. It rejects `SELECT` and other read-only SQL so read and write workflows stay separate.
+- Writable SQL is supported only for MySQL, Oracle, PostgreSQL, and openGauss targets configured with `readonly: false`.
+- Redis tools are read-oriented and do not expose write operations.
+- `show_loaded_config` and discovery tools return sanitized summaries. Passwords are never returned to the MCP client.
+- Config reload is atomic. If a new config file is invalid, the previous validated in-memory config remains active.
+- Connections are opened lazily for each request and cleaned up after the request finishes.
+
+### Write Confirmation and Two-Step Fallback
+
+- Manual user confirmation is always required before `execute_statement` executes.
+- When the MCP client supports elicitation, the server asks for confirmation directly through the client.
+- When elicitation is not available, the server uses the same explicit two-step confirmation model as other high-risk MCP tools: the first call returns confirmation details and a `confirmationId`; the second call must repeat the same `databaseKey`, `sql`, and `params`, then pass that `confirmationId` with `confirmExecution: true`.
+- The server verifies that the second call matches the original pending request before execution.
+- Confirmation details include SQL type, target object, SQL preview, parameter preview, risk level, and risk hints for dangerous statements such as `UPDATE` or `DELETE` without `WHERE`.
+
+## Config Reload
+
+- The server loads and validates the JSON config at startup.
+- The config file is watched and reloaded after on-disk changes.
+- Reload is debounced to avoid reading half-written files.
+- Reload is atomic: if the new config is invalid, the previous in-memory config remains active.
+- `reload_config` forces a manual reload.
+- `show_loaded_config` reports the current config path, load time, logging status, query timeout, and sanitized connection summaries. Passwords are never returned.
+
+## Oracle Notes
+
+Oracle supports Thin and Thick mode. Thin mode is the default when `clientMode` is omitted.
+
+Thick mode requires Oracle Instant Client:
 
 ```json
 {
@@ -119,39 +209,63 @@ Oracle supports both Thin and Thick mode. Thick mode uses the same `oracledb` pa
     "host": "127.0.0.1",
     "port": 1521,
     "serviceName": "XEPDB1",
-    "user": "system",
-    "password": "secret",
+    "user": "app_reader",
+    "password": "replace-with-password",
     "clientMode": "thick",
     "clientLibDir": "C:\\oracle\\instantclient_19_25"
   }
 }
 ```
 
-## Available MCP Tools
-- `show_loaded_config`: show the current in-memory config path, load time, and all configured database targets
-- `reload_config`: reload the JSON config file currently in use and atomically replace the in-memory configuration on success
-- `list_databases`: list all configured target keys and logical database names without opening database connections
-- `ping_database`: test connectivity for one configured target
-- `list_schemas`: list schemas for one SQL target
-- `list_tables`: list tables/views under one SQL schema or the default schema
-- `list_views`: list views under one SQL schema or the default schema
-- `describe_table`: inspect columns before writing joins, reports, or optimization SQL
-- `show_create_table`: inspect exact database-side DDL when the current database supports it
-- `search_tables`: search tables or views by partial name
-- `search_columns`: search columns by partial name across a schema
-- `list_indexes`: inspect table indexes for performance analysis
-- `get_table_statistics`: inspect approximate row counts, storage metrics, and database-specific table statistics
-- `show_variables`: inspect database runtime configuration variables
-- `find_long_running_queries`: inspect currently running sessions above a duration threshold
-- `find_blocking_sessions`: inspect current blocking relationships between sessions
-- `show_locks`: inspect current lock rows exposed by the database
-- `execute_query`: run one read-only SQL query; pass the original query SQL, not write SQL
-- `explain_query`: get the static execution plan for one read-only SQL query; pass the original query SQL, not `EXPLAIN ...`
-- `analyze_query`: get runtime analysis for one read-only SQL query; pass the original query SQL, not `EXPLAIN ANALYZE ...`
-- `execute_statement`: run one non-query SQL statement on a writable target after explicit manual confirmation
-- `redis_get`: read one Redis string key
-- `redis_hgetall`: read one Redis hash key
-- `redis_scan`: cursor-scan Redis keys safely with an optional pattern
+All Oracle targets in one process must use the same client mode. Thick mode targets must also share the same `clientLibDir`.
+
+`analyze_query` is not supported for Oracle and returns `NOT_SUPPORTED`.
+
+## Skill Integration
+
+This repository includes an agent skill for safer database workflows:
+
+- Skill path: `skills/database-mcp/SKILL.md`
+
+Use it when your agent supports skills. It standardizes database discovery, result-size discipline, read-first defaults, and write confirmation behavior.
+
+## MCP Client Configuration
+
+Codex:
+
+```toml
+[mcp_servers.database]
+command = "mcp-database-service"
+args = ["--config", "./config/databases.json"]
+```
+
+Gemini CLI:
+
+```json
+{
+  "mcpServers": {
+    "database": {
+      "type": "stdio",
+      "command": "mcp-database-service",
+      "args": ["--config", "./config/databases.json"]
+    }
+  }
+}
+```
+
+Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "database": {
+      "type": "stdio",
+      "command": "mcp-database-service",
+      "args": ["--config", "./config/databases.json"]
+    }
+  }
+}
+```
 
 ## Development
 
@@ -161,140 +275,28 @@ npm run build
 node dist/index.js --config ./config/databases.example.json
 ```
 
-## Global Installation
+Run tests after building:
 
-This project exposes a CLI command named `mcp-database-service` through the package `bin` field.
-
-Recommended options:
-
-1. Install from npm:
-
-```powershell
-npm install -g @jadchene/mcp-database-service
+```bash
+npm test
 ```
 
-2. Or install from the local source tree with the helper script:
+## Global Installation From Source
+
+Windows:
 
 ```powershell
 pwsh -File .\scripts\install-global.ps1
 ```
 
-Or on Linux/macOS:
+Linux/macOS:
 
 ```bash
 sh ./scripts/install-global.sh
 ```
 
-The helper scripts install dependencies, build the project, create a tarball with `npm pack`, install that tarball globally with `npm install -g <tarball>`, and then delete the temporary tarball. They do not use `npm link`.
+The helper scripts install dependencies, build the project, create a tarball with `npm pack`, install that tarball globally, and delete the temporary tarball. They do not use `npm link`.
 
-3. Or install the packed tarball manually:
+## License
 
-```powershell
-npm pack
-npm install -g .\jadchene-mcp-database-service-0.1.5.tgz
-```
-
-The package only publishes runtime files through the `files` field, so packaged installation includes `dist` and the runtime README/config example, not the whole source tree.
-
-After installation, the command can be used like this:
-
-```powershell
-mcp-database-service --config .\config\databases.example.json
-```
-
-Example MCP server configuration:
-
-```json
-{
-  "mcpServers": {
-    "database": {
-      "command": "mcp-database-service",
-      "args": [
-        "--config",
-        "C:\\path\\to\\databases.json"
-      ]
-    }
-  }
-}
-```
-
-## MCP Client Configuration
-
-The following examples show how to register this MCP server in common AI clients. Replace the config path with your own local file path. To keep the setup portable, the examples below intentionally avoid absolute paths.
-
-### Codex
-
-`~/.codex/config.toml`
-
-```toml
-[mcp_servers.database]
-command = "mcp-database-service"
-args = ["--config", "./config/databases.json"]
-```
-
-### Gemini CLI
-
-`~/.gemini/settings.json`
-
-```json
-{
-  "mcpServers": {
-    "database": {
-      "type": "stdio",
-      "command": "mcp-database-service",
-      "args": [
-        "--config",
-        "./config/databases.json"
-      ]
-    }
-  }
-}
-```
-
-### Claude Code
-
-`~/.claude.json`
-
-```json
-{
-  "mcpServers": {
-    "database": {
-      "type": "stdio",
-      "command": "mcp-database-service",
-      "args": [
-        "--config",
-        "./config/databases.json"
-      ]
-    }
-  }
-}
-```
-
-## Config Reload
-
-- The server loads the JSON config file at startup and keeps a validated in-memory snapshot.
-- The server also watches the same JSON file and automatically reloads it after on-disk changes are detected.
-- Automatic reload is debounced to avoid reloading half-written files too aggressively.
-- You can still use `reload_config` to force a manual reload without restarting the process.
-- Reload is atomic: if the new file is invalid, the old in-memory configuration remains active.
-- `show_loaded_config` can be used to inspect the current config path, load time, and configured database targets.
-- `show_loaded_config` also includes the current logging status, resolved log directory, and configured query timeout.
-- `show_loaded_config` also includes a sanitized connection summary for each target, such as host, port, databaseName or serviceName, user name, and Oracle client mode, but it never exposes passwords.
-
-## Oracle Notes
-- Thin mode is the default when `clientMode` is omitted.
-- Thick mode requires `clientMode: "thick"` and a valid `clientLibDir`.
-- All Oracle targets in one process must use the same client mode. Thick mode targets must also share the same `clientLibDir`.
-- `analyze_query` is currently not supported for Oracle and will return `NOT_SUPPORTED`.
-
-## Write Statements
-- `execute_query` remains read-only and blocks non-query SQL.
-- `execute_statement` is intended for writable SQL targets only.
-- `execute_statement` requires `readonly: false` on the target database config.
-- Before executing a non-query SQL statement, the server asks the MCP client for explicit user confirmation through MCP elicitation when the client supports it.
-- If the MCP client does not support elicitation, `execute_statement` automatically falls back to a two-step confirmation flow: the first call returns confirmation details and a `confirmationId`, and the second call must resend the same SQL with `confirmationId` and `confirmExecution: true` after the user confirms.
-- `execute_statement` confirmation includes SQL type, target object, SQL preview, parameter preview, and risk hints for dangerous statements.
-
-
-
-
+MIT. See [LICENSE](LICENSE).
