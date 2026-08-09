@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
+import { fingerprintDatabaseTarget } from "../config/databaseFingerprint.js";
 import { summarizeDatabaseListItem, summarizeLoadedConfig } from "../config/configSummary.js";
 import type { LoadedConfig } from "../config/configTypes.js";
 import { ApplicationError } from "../core/errors.js";
@@ -170,7 +171,7 @@ type ToolExecutionContext = {
     confirmationId?: string;
     confirmExecution?: boolean;
   }): Promise<
-    | { status: "confirmed" }
+    | { status: "confirmed"; databaseFingerprint: string }
     | {
       status: "pending";
       confirmationId: string;
@@ -1038,7 +1039,7 @@ export function buildToolRegistry(): ToolDefinition[] {
         whenNotToUse:
           "Do not use this for INSERT, UPDATE, DELETE, MERGE, DDL, or multi-statement SQL. Do not use it for runtime plan analysis; use analyze_query instead.",
         inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus original query SQL. Allowed SQL shapes are SELECT, SHOW, DESCRIBE, DESC, EXPLAIN, or WITH ... SELECT. Optional params and maxRows. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
+          "Requires databaseKey using the configured target key from list_databases.key, plus original query SQL. Allowed SQL shapes are SELECT, SHOW, DESCRIBE, DESC, or WITH ... SELECT. Use explain_query instead of adding an EXPLAIN wrapper. Optional params and maxRows. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
         databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
       }),
       executeQuerySchema,
@@ -1110,6 +1111,17 @@ export function buildToolRegistry(): ToolDefinition[] {
 
       if (confirmation.status === "pending") {
         return confirmation;
+      }
+
+      const confirmedDatabase = context.getConfig().databaseMap.get(args.databaseKey);
+      if (
+        !confirmedDatabase ||
+        fingerprintDatabaseTarget(confirmedDatabase) !== confirmation.databaseFingerprint
+      ) {
+        throw new ApplicationError(
+          "INVALID_ARGUMENT",
+          "Database target configuration changed after confirmation; request confirmation again"
+        );
       }
 
       return context.useSqlDatabase(args.databaseKey, async (adapter) => {

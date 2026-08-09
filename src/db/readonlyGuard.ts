@@ -1,6 +1,7 @@
 import { ApplicationError } from "../core/errors.js";
 
 const ALLOWED_DIRECT_KEYWORDS = new Set(["SELECT", "SHOW", "DESCRIBE", "DESC"]);
+const MYSQL_EXECUTABLE_COMMENT_MARKER = "\0MYSQL_EXECUTABLE_COMMENT";
 const BLOCKED_KEYWORDS = new Set([
   "INSERT",
   "UPDATE",
@@ -96,6 +97,12 @@ export function inspectSqlStatement(sql: string): SqlStatementInfo {
 function containsUnsafeReadonlyConstruct(sql: string): boolean {
   const words = readSqlWords(sql);
 
+  // MySQL executes the contents of /*! ... */ comments. Treating those as
+  // ordinary comments would let side-effecting clauses bypass this guard.
+  if (words.includes(MYSQL_EXECUTABLE_COMMENT_MARKER)) {
+    return true;
+  }
+
   if (words[0] === "SHOW" || words[0] === "DESCRIBE" || words[0] === "DESC") {
     return false;
   }
@@ -155,6 +162,12 @@ function readSqlWords(sql: string): string[] {
       const end = sql.indexOf("*/", index + 2);
       if (end === -1) {
         throw new ApplicationError("READONLY_VIOLATION", "Unclosed SQL comment");
+      }
+      if (
+        sql[index + 2] === "!" ||
+        (sql[index + 2]?.toUpperCase() === "M" && sql[index + 3] === "!")
+      ) {
+        words.push(MYSQL_EXECUTABLE_COMMENT_MARKER);
       }
       index = end + 2;
       continue;

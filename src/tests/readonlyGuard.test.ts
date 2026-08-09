@@ -59,6 +59,24 @@ test("readonly guard allows MySQL SHOW CREATE TABLE", () => {
   assert.doesNotThrow(() => assertReadonlySql("SHOW CREATE TABLE `users`"));
 });
 
+for (const sql of [
+  "SELECT 1 /*!50000 INTO OUTFILE '/tmp/mcp-audit' */",
+  "SELECT 1 /*!50000 INTO DUMPFILE '/tmp/mcp-audit' */",
+  "SELECT * FROM users /*!50000 FOR UPDATE */",
+  "SELECT 1 /*M! INTO OUTFILE '/tmp/mariadb-audit' */"
+]) {
+  test(`readonly guard blocks MySQL executable comments: ${sql}`, () => {
+    assert.throws(
+      () => assertReadonlySql(sql),
+      (error: unknown) => error instanceof ApplicationError && error.code === "READONLY_VIOLATION"
+    );
+  });
+}
+
+test("readonly guard does not treat executable-comment text inside a string as executable", () => {
+  assert.doesNotThrow(() => assertReadonlySql("SELECT '/*!50000 DELETE FROM users */' AS example"));
+});
+
 test("statement inspection marks update without where as high risk", () => {
   const result = inspectSqlStatement("update users set enabled = 0");
 

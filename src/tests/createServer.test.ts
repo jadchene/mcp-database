@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { fingerprintDatabaseTarget } from "../config/databaseFingerprint.js";
 import { ApplicationError } from "../core/errors.js";
 import { confirmStatementExecutionWithFallback } from "../server/createServer.js";
 
@@ -97,12 +98,56 @@ test("two-step confirmation rejects changed SQL or params on second call", async
   );
 });
 
+test("two-step confirmation rejects a changed database target", async () => {
+  const pendingConfirmations = new Map();
+
+  await confirmStatementExecutionWithFallback({
+    database: writableMysqlTarget,
+    input: {
+      databaseKey: "mysql-write",
+      sql: "delete from users where id = ?",
+      params: [1]
+    },
+    pendingConfirmations,
+    supportsInteractiveConfirmation: false,
+    createId: () => "confirm-target"
+  });
+
+  await assert.rejects(
+    () => confirmStatementExecutionWithFallback({
+      database: {
+        ...writableMysqlTarget,
+        connection: {
+          ...writableMysqlTarget.connection,
+          host: "production.example.internal",
+          databaseName: "production"
+        }
+      },
+      input: {
+        databaseKey: "mysql-write",
+        sql: "delete from users where id = ?",
+        params: [1],
+        confirmationId: "confirm-target",
+        confirmExecution: true
+      },
+      pendingConfirmations,
+      supportsInteractiveConfirmation: false
+    }),
+    (error: unknown) =>
+      error instanceof ApplicationError &&
+      error.code === "INVALID_ARGUMENT" &&
+      /configuration changed after confirmation/i.test(error.message)
+  );
+  assert.equal(pendingConfirmations.size, 0);
+});
+
 test("two-step confirmation enforces a maximum number of pending requests", async () => {
   const pendingConfirmations = new Map([
     [
       "confirm-existing",
       {
         databaseKey: "mysql-write",
+        databaseFingerprint: fingerprintDatabaseTarget(writableMysqlTarget),
         sql: "update users set enabled = 1 where id = 1",
         params: [],
         expiresAt: Date.now() + 60_000

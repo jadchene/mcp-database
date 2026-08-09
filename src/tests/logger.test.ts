@@ -24,3 +24,26 @@ test("structured logs redact SQL text, parameters, and secrets", () => {
   assert.match(output, /fingerprint/);
   assert.match(output, /REDACTED/);
 });
+
+test("structured logs preserve event names and summarize driver error messages", () => {
+  const original = console.error;
+  const lines: string[] = [];
+  console.error = (value?: unknown) => lines.push(String(value));
+  try {
+    log("error", "Tool execution failed", {
+      message: "must-not-overwrite-event",
+      errorMessage: "syntax error near 'super-secret-value'",
+      details: { error: "another-secret-value" }
+    });
+  } finally {
+    console.error = original;
+  }
+
+  const output = lines.join("\n");
+  const payload = JSON.parse(output) as Record<string, unknown>;
+  assert.equal(payload.message, "Tool execution failed");
+  assert.doesNotMatch(output, /must-not-overwrite-event/);
+  assert.doesNotMatch(output, /super-secret-value/);
+  assert.doesNotMatch(output, /another-secret-value/);
+  assert.match(output, /fingerprint/);
+});

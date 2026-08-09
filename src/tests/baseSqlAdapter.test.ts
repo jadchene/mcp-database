@@ -26,18 +26,40 @@ test("executeQuery uses a read-only transaction and adapter-side row limiting", 
   assert.deepEqual(result.rows, [{ id: 1 }, { id: 2 }]);
 });
 
+test("write timeout cancels the operation and reports an unknown outcome", async () => {
+  const adapter = new FakeSqlAdapter(config, 5, 50);
+
+  await assert.rejects(
+    () => adapter.executeStatement("update users set enabled = 0 where id = 1"),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "EXECUTION_OUTCOME_UNKNOWN"
+  );
+  assert.ok(adapter.events.includes("cancel"));
+});
+
 class FakeSqlAdapter extends BaseSqlAdapter {
   public readonly events: string[] = [];
 
-  public constructor(configValue: MysqlDatabaseConfig) {
-    super(configValue, null);
+  public constructor(
+    configValue: MysqlDatabaseConfig,
+    timeoutMs: number | null = null,
+    private readonly statementDelayMs = 0
+  ) {
+    super(configValue, timeoutMs);
   }
 
   public async connect(): Promise<void> {}
   public async close(): Promise<void> {}
 
   protected async executeRaw(): Promise<Record<string, unknown>[]> { return []; }
-  protected async executeStatementRaw(): Promise<{ affectedRows: number | null }> { return { affectedRows: 0 }; }
+  protected async executeStatementRaw(): Promise<{ affectedRows: number | null }> {
+    if (this.statementDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.statementDelayMs));
+    }
+    return { affectedRows: 0 };
+  }
   protected async executeLimitedQueryRaw(
     _sql: string,
     _params: unknown[] | undefined,

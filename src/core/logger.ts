@@ -29,12 +29,17 @@ export function configureLogger(config: { enabled: boolean; directory: string })
 }
 
 export function log(level: LogLevel, message: string, fields?: Record<string, unknown>): void {
-  const payload = sanitizeRecord({
+  const sanitizedFields = sanitizeRecord(fields ?? {});
+  delete sanitizedFields.timestamp;
+  delete sanitizedFields.level;
+  delete sanitizedFields.message;
+
+  const payload = {
     timestamp: new Date().toISOString(),
     level,
     message,
-    ...(fields ?? {})
-  });
+    ...sanitizedFields
+  };
 
   const line = JSON.stringify(payload);
 
@@ -62,6 +67,15 @@ function sanitizeRecord(value: Record<string, unknown>): Record<string, unknown>
 
 function sanitizeLogValue(key: string, value: unknown): unknown {
   const normalizedKey = key.toLowerCase();
+  if (
+    normalizedKey === "error" ||
+    normalizedKey === "message" ||
+    normalizedKey.endsWith("message") ||
+    normalizedKey.endsWith("reason")
+  ) {
+    return summarizeSensitiveText(value);
+  }
+
   if (normalizedKey === "sql") {
     const sql = typeof value === "string" ? value : String(value ?? "");
     return {
@@ -89,6 +103,14 @@ function sanitizeLogValue(key: string, value: unknown): unknown {
   }
 
   return value;
+}
+
+function summarizeSensitiveText(value: unknown): { length: number; fingerprint: string } {
+  const text = typeof value === "string" ? value : String(value ?? "");
+  return {
+    length: text.length,
+    fingerprint: createHash("sha256").update(text).digest("hex").slice(0, 16)
+  };
 }
 
 function formatFileLog(payload: Record<string, unknown>): string {

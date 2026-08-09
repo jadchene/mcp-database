@@ -3,6 +3,7 @@ import { watchFile, unwatchFile } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { fingerprintDatabaseTarget } from "../config/databaseFingerprint.js";
 import { summarizeLoadedConfig } from "../config/configSummary.js";
 import { loadConfigFromPath } from "../config/loadConfig.js";
 import { inspectSqlStatement } from "../db/readonlyGuard.js";
@@ -17,6 +18,7 @@ import { SERVICE_NAME, SERVICE_VERSION } from "../version.js";
 
 interface PendingStatementConfirmation {
   databaseKey: string;
+  databaseFingerprint: string;
   sql: string;
   params?: unknown[];
   expiresAt: number;
@@ -42,7 +44,7 @@ interface StatementConfirmationContext {
 }
 
 type StatementConfirmationResult =
-  | { status: "confirmed" }
+  | { status: "confirmed"; databaseFingerprint: string }
   | {
     status: "pending";
     confirmationId: string;
@@ -94,7 +96,7 @@ async function withDatabaseAdapter<T>(
         databaseKey,
         type: database.type,
         code: wrapped.code,
-        message: wrapped.message
+        errorMessage: wrapped.message
       });
     });
 
@@ -126,6 +128,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     reloadInFlight = loadConfigFromPath(previousConfig.configPath)
       .then((reloadedConfig) => {
         currentConfig = reloadedConfig;
+        pendingStatementConfirmations.clear();
 
         log("info", reason === "manual" ? "Database configuration reloaded" : "Database configuration auto-reloaded", {
           reason,
@@ -143,7 +146,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
           reason,
           configPath: previousConfig.configPath,
           code: wrapped.code,
-          message: wrapped.message,
+          errorMessage: wrapped.message,
           details: wrapped.details
         });
         throw wrapped;
@@ -306,7 +309,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
       log("error", "Tool execution failed", {
         toolName: tool.name,
         code: wrapped.code,
-        message: wrapped.message,
+        errorMessage: wrapped.message,
         details: wrapped.details
       });
 
@@ -477,6 +480,7 @@ export async function confirmStatementExecutionWithFallback(
   const previewParams = buildParamsPreview(input.params);
   const targetObject = extractSqlTargetObject(statement.firstKeyword, input.sql);
   const riskSummary = buildRiskSummary(statement.riskLevel, statement.riskReasons);
+  const databaseFingerprint = fingerprintDatabaseTarget(database);
 
   cleanupExpiredConfirmations(pendingConfirmations, now());
 
@@ -495,7 +499,7 @@ export async function confirmStatementExecutionWithFallback(
         confirmationMode: "interactive"
       });
 
-      return { status: "confirmed" };
+      return { status: "confirmed", databaseFingerprint };
     } catch (error) {
       if (error instanceof ApplicationError) {
         throw error;
@@ -505,7 +509,7 @@ export async function confirmStatementExecutionWithFallback(
         databaseKey: input.databaseKey,
         sql: input.sql,
         params: input.params ?? [],
-        reason: error instanceof Error ? error.message : String(error)
+        errorReason: error instanceof Error ? error.message : String(error)
       });
       // Fall back to two-step confirmation when the host claims support but the request fails.
     }
@@ -517,6 +521,14 @@ export async function confirmStatementExecutionWithFallback(
       throw new ApplicationError(
         "INVALID_ARGUMENT",
         "Unknown or expired confirmationId for execute_statement"
+      );
+    }
+
+    if (pending.databaseFingerprint !== databaseFingerprint) {
+      pendingConfirmations.delete(input.confirmationId);
+      throw new ApplicationError(
+        "INVALID_ARGUMENT",
+        "Database target configuration changed after confirmation; request confirmation again"
       );
     }
 
@@ -540,7 +552,7 @@ export async function confirmStatementExecutionWithFallback(
       confirmationMode: "two_step",
       confirmationId: input.confirmationId
     });
-    return { status: "confirmed" };
+    return { status: "confirmed", databaseFingerprint };
   }
 
   if (pendingConfirmations.size >= maxPendingConfirmations) {
@@ -553,6 +565,7 @@ export async function confirmStatementExecutionWithFallback(
   const confirmationId = createId();
   pendingConfirmations.set(confirmationId, {
     databaseKey: input.databaseKey,
+    databaseFingerprint,
     sql: input.sql,
     params: input.params,
     expiresAt: now() + PENDING_CONFIRMATION_TTL_MS
