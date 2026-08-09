@@ -1,4 +1,5 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFile, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 type LogLevel = "info" | "warn" | "error";
@@ -28,20 +29,66 @@ export function configureLogger(config: { enabled: boolean; directory: string })
 }
 
 export function log(level: LogLevel, message: string, fields?: Record<string, unknown>): void {
-  const payload = {
+  const payload = sanitizeRecord({
     timestamp: new Date().toISOString(),
     level,
     message,
     ...(fields ?? {})
-  };
+  });
 
   const line = JSON.stringify(payload);
 
   console.error(line);
 
   if (loggerState.enabled) {
-    appendFileSync(loggerState.filePath, `${formatFileLog(payload)}\n`, "utf8");
+    appendFile(loggerState.filePath, `${formatFileLog(payload)}\n`, "utf8", (error) => {
+      if (error) {
+        console.error(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: "error",
+          message: "Failed to append application log",
+          cause: error.name
+        }));
+      }
+    });
   }
+}
+
+function sanitizeRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, sanitizeLogValue(key, item)])
+  );
+}
+
+function sanitizeLogValue(key: string, value: unknown): unknown {
+  const normalizedKey = key.toLowerCase();
+  if (normalizedKey === "sql") {
+    const sql = typeof value === "string" ? value : String(value ?? "");
+    return {
+      length: sql.length,
+      fingerprint: createHash("sha256").update(sql).digest("hex").slice(0, 16)
+    };
+  }
+
+  if (normalizedKey === "params" || normalizedKey === "parameters") {
+    return {
+      count: Array.isArray(value) ? value.length : value && typeof value === "object" ? Object.keys(value).length : 0
+    };
+  }
+
+  if (["password", "secret", "token", "authorization", "apikey", "api_key"].some((part) => normalizedKey.includes(part))) {
+    return "[REDACTED]";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => item && typeof item === "object" ? sanitizeRecord(item as Record<string, unknown>) : item);
+  }
+
+  if (value && typeof value === "object") {
+    return sanitizeRecord(value as Record<string, unknown>);
+  }
+
+  return value;
 }
 
 function formatFileLog(payload: Record<string, unknown>): string {

@@ -94,7 +94,7 @@ Minimal SQL target example:
 
 `logging.enabled` defaults to `false`. When enabled, logs are written to the system temporary directory unless `logging.directory` is set. Relative log directories are resolved from the config file location.
 
-`query.timeoutMs` is optional. When set, the server applies that timeout to database operations.
+`query.timeoutMs` is optional. When set, the server applies that timeout to database operations and interrupts the active connection after expiry. A timed-out write returns `EXECUTION_OUTCOME_UNKNOWN`, so callers can verify the result instead of retrying blindly.
 
 ## Supported Databases
 
@@ -168,12 +168,13 @@ Redis:
 ## Safety Model
 
 - Read tools are separated from write tools. Use `execute_query` for read-only SQL and `execute_statement` for non-query SQL.
-- `execute_query` runs through a read-only SQL guard. It rejects writes, unsupported statement types, and multi-statement SQL.
+- `execute_query` runs through a read-only SQL guard and always executes in a database read-only transaction, even for writable targets. It rejects writes, data-modifying CTEs, `SELECT INTO`, file output, locking queries, unsupported statement types, and multi-statement SQL.
 - SQL targets are controlled by the per-target `readonly` flag. `execute_statement` is rejected when the selected target has `readonly: true`.
 - `execute_statement` accepts non-query SQL only. It rejects `SELECT` and other read-only SQL so read and write workflows stay separate.
 - Writable SQL is supported only for MySQL, Oracle, PostgreSQL, and openGauss targets configured with `readonly: false`.
 - Redis tools are read-oriented and do not expose write operations.
 - `show_loaded_config` and discovery tools return sanitized summaries. Passwords are never returned to the MCP client.
+- Runtime logs store only SQL length, a fingerprint, and parameter count; SQL text and parameter values are not logged.
 - Config reload is atomic. If a new config file is invalid, the previous validated in-memory config remains active.
 - Connections are opened lazily for each request and cleaned up after the request finishes.
 

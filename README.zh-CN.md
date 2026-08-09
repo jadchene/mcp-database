@@ -10,7 +10,7 @@ MCP Database Service 是一个 TypeScript 编写的 MCP 服务，让 AI Agent �
 
 - 在一个 JSON 配置文件中管理多个命名数据库目标。
 - 支持 MySQL、PostgreSQL、openGauss、Oracle 和 Redis。
-- 只读查询工具会阻止写入 SQL。
+- 只读查询工具会拒绝带写入或锁副作用的 SQL，并在数据库只读事务中执行。
 - 提供 schema、表、列、索引、变量、锁和会话等元数据工具。
 - 通过 `explain_query` 查看静态执行计划。
 - 在支持的数据库上通过 `analyze_query` 查看运行时分析。
@@ -94,7 +94,7 @@ MCP_DATABASE_CONFIG=./config/databases.json mcp-database-service
 
 `logging.enabled` 默认为 `false`。启用后，如果没有设置 `logging.directory`，日志会写入系统临时目录。相对日志目录会按配置文件所在目录解析。
 
-`query.timeoutMs` 是可选项。设置后，服务会把该超时时间应用到数据库操作上。
+`query.timeoutMs` 是可选项。设置后，服务会把该超时时间应用到数据库操作上，并在超时后中断当前连接。写入超时会返回 `EXECUTION_OUTCOME_UNKNOWN`，表示调用方应核验结果而不是盲目重试。
 
 ## 支持的数据库
 
@@ -168,12 +168,13 @@ Redis：
 ## 安全模型
 
 - 读工具和写工具分离。只读 SQL 使用 `execute_query`，非查询 SQL 使用 `execute_statement`。
-- `execute_query` 会经过只读 SQL guard。它会拒绝写入、未知语句类型和多语句 SQL。
+- `execute_query` 会经过只读 SQL guard，并始终在数据库只读事务中执行，即使目标配置为可写。它会拒绝写入、数据修改 CTE、`SELECT INTO`、文件输出、锁定查询、未知语句类型和多语句 SQL。
 - SQL 目标由每个 target 的 `readonly` 标志控制。当目标配置 `readonly: true` 时，`execute_statement` 会被拒绝。
 - `execute_statement` 只接受非查询 SQL。它会拒绝 `SELECT` 和其他只读 SQL，确保读写流程分离。
 - 可写 SQL 仅支持配置为 `readonly: false` 的 MySQL、Oracle、PostgreSQL 和 openGauss 目标。
 - Redis 工具是只读取向，不暴露写操作。
 - `show_loaded_config` 和发现工具只返回脱敏摘要。密码不会返回给 MCP 客户端。
+- 运行日志默认只记录 SQL 长度、指纹和参数数量，不记录 SQL 原文或参数值。
 - 配置刷新是原子的。新配置无效时，继续使用上一份已校验的内存配置。
 - 连接按请求懒加载，并在请求结束后清理。
 

@@ -28,6 +28,37 @@ test("readonly guard blocks multi statements", () => {
   );
 });
 
+for (const sql of [
+  "EXPLAIN ANALYZE DELETE FROM users WHERE id = 1",
+  "SELECT * INTO backup_users FROM users",
+  "SELECT * FROM users FOR UPDATE",
+  "SELECT 1 INTO OUTFILE '/tmp/leak'",
+  "WITH changed AS (DELETE FROM users RETURNING *) SELECT * FROM changed"
+]) {
+  test(`readonly guard blocks side-effecting query: ${sql}`, () => {
+    assert.throws(
+      () => assertReadonlySql(sql),
+      (error: unknown) => error instanceof ApplicationError && error.code === "READONLY_VIOLATION"
+    );
+  });
+}
+
+test("readonly guard ignores blocked words inside strings and comments", () => {
+  assert.doesNotThrow(() => {
+    assertReadonlySql("select 'delete from users' as example /* update users */");
+  });
+});
+
+test("readonly guard supports PostgreSQL dollar-quoted strings", () => {
+  assert.doesNotThrow(() => {
+    assertReadonlySql("select $$delete from users$$ as example");
+  });
+});
+
+test("readonly guard allows MySQL SHOW CREATE TABLE", () => {
+  assert.doesNotThrow(() => assertReadonlySql("SHOW CREATE TABLE `users`"));
+});
+
 test("statement inspection marks update without where as high risk", () => {
   const result = inspectSqlStatement("update users set enabled = 0");
 

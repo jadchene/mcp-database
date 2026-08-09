@@ -1,4 +1,4 @@
-import type { Connection } from "mysql2/promise";
+import type { Connection, QueryOptions, RowDataPacket } from "mysql2";
 
 import type { MysqlDatabaseConfig } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
@@ -13,29 +13,40 @@ export class MysqlAdapter extends BaseSqlAdapter {
 
   public override async connect(): Promise<void> {
     try {
-      const mysql = await import("mysql2/promise");
+      const module = await import("mysql2");
+      const mysql = module.default ?? module;
       const ssl =
         this.mysqlConfig.connection.ssl === true
           ? {}
           : this.mysqlConfig.connection.ssl && typeof this.mysqlConfig.connection.ssl === "object"
             ? this.mysqlConfig.connection.ssl
             : undefined;
-      this.connection = await mysql.createConnection({
-        host: this.mysqlConfig.connection.host,
-        port: this.mysqlConfig.connection.port ?? 3306,
-        database: this.mysqlConfig.connection.databaseName,
-        user: this.mysqlConfig.connection.user,
-        password: this.mysqlConfig.connection.password,
-        connectTimeout: this.mysqlConfig.connection.connectTimeoutMs,
-        ssl
+      this.connection = await new Promise<Connection>((resolve, reject) => {
+        const connection = mysql.createConnection({
+          host: this.mysqlConfig.connection.host,
+          port: this.mysqlConfig.connection.port ?? 3306,
+          database: this.mysqlConfig.connection.databaseName,
+          user: this.mysqlConfig.connection.user,
+          password: this.mysqlConfig.connection.password,
+          connectTimeout: this.mysqlConfig.connection.connectTimeoutMs,
+          ssl
+        });
+        connection.connect((error) => {
+          if (error) {
+            connection.destroy();
+            reject(error);
+            return;
+          }
+          resolve(connection);
+        });
       });
 
       if (this.mysqlConfig.readonly) {
-        await this.connection.query("SET SESSION TRANSACTION READ ONLY");
+        await this.query("SET SESSION TRANSACTION READ ONLY");
       }
 
       if (this.queryTimeoutMs) {
-        await this.connection.query("SET SESSION MAX_EXECUTION_TIME = ?", [this.queryTimeoutMs]);
+        await this.query("SET SESSION MAX_EXECUTION_TIME = ?", [this.queryTimeoutMs]);
       }
     } catch (error) {
       throw toApplicationError(error, "CONNECTION_ERROR");
@@ -47,8 +58,11 @@ export class MysqlAdapter extends BaseSqlAdapter {
       return;
     }
 
-    await this.connection.end();
+    const connection = this.connection;
     this.connection = null;
+    await new Promise<void>((resolve, reject) => {
+      connection.end((error) => error ? reject(error) : resolve());
+    });
   }
 
   protected override async executeRaw(
@@ -59,7 +73,7 @@ export class MysqlAdapter extends BaseSqlAdapter {
       throw new ApplicationError("CONNECTION_ERROR", "MySQL connection is not open");
     }
 
-    const [rows] = await this.connection.query(sql, Array.isArray(params) ? params : []);
+    const rows = await this.query(sql, Array.isArray(params) ? params : []);
     return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
   }
 
@@ -71,7 +85,7 @@ export class MysqlAdapter extends BaseSqlAdapter {
       throw new ApplicationError("CONNECTION_ERROR", "MySQL connection is not open");
     }
 
-    const [result] = await this.connection.query(sql, Array.isArray(params) ? params : []);
+    const result = await this.query(sql, Array.isArray(params) ? params : []);
     const affectedRows =
       typeof result === "object" && result !== null && "affectedRows" in result
         ? Number((result as { affectedRows?: number }).affectedRows ?? 0)
@@ -80,18 +94,86 @@ export class MysqlAdapter extends BaseSqlAdapter {
     return { affectedRows };
   }
 
+  protected override async executeLimitedQueryRaw(
+    sql: string,
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    if (!this.connection) {
+      throw new ApplicationError("CONNECTION_ERROR", "MySQL connection is not open");
+    }
+
+    const connection = this.connection;
+    return new Promise((resolve, reject) => {
+      const rows: Record<string, unknown>[] = [];
+      let settled = false;
+      const options: QueryOptions = {
+        sql,
+        values: (params ?? []) as never,
+        timeout: this.queryTimeoutMs ?? undefined
+      };
+      const stream = connection.query(options).stream({ objectMode: true, highWaterMark: 16 });
+
+      stream.on("data", (row: RowDataPacket) => {
+        rows.push(row as Record<string, unknown>);
+        if (rows.length <= maxRows || settled) {
+          return;
+        }
+
+        settled = true;
+        stream.destroy();
+        connection.destroy();
+        if (this.connection === connection) {
+          this.connection = null;
+        }
+        resolve({ rows: rows.slice(0, maxRows), truncated: true });
+      });
+      stream.once("end", () => {
+        if (!settled) {
+          settled = true;
+          resolve({ rows, truncated: false });
+        }
+      });
+      stream.once("error", (error) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      });
+    });
+  }
+
+  protected override async beginReadonlyTransaction(): Promise<void> {
+    await this.query("START TRANSACTION READ ONLY");
+  }
+
+  protected override async rollbackReadonlyTransaction(): Promise<void> {
+    if (this.connection) {
+      await this.query("ROLLBACK");
+    }
+  }
+
+  protected override async cancelCurrentOperation(): Promise<void> {
+    if (this.connection) {
+      this.connection.destroy();
+      this.connection = null;
+    }
+  }
+
   protected override async explainQueryRows(
     sql: string,
-    params?: unknown[] | Record<string, unknown>
-  ): Promise<Record<string, unknown>[]> {
-    return this.executeRaw(`EXPLAIN ${sql}`, params);
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    return this.executeLimitedQueryRaw(`EXPLAIN ${sql}`, params, maxRows);
   }
 
   protected override async analyzeQueryRows(
     sql: string,
-    params?: unknown[] | Record<string, unknown>
-  ): Promise<Record<string, unknown>[]> {
-    return this.executeRaw(`EXPLAIN ANALYZE ${sql}`, params);
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    return this.executeLimitedQueryRaw(`EXPLAIN ANALYZE ${sql}`, params, maxRows);
   }
 
   protected override pingSql(): string {
@@ -179,5 +261,21 @@ export class MysqlAdapter extends BaseSqlAdapter {
       `,
       params: [schema ?? null, table]
     };
+  }
+
+  private async query(sql: string, params: unknown[] = []): Promise<unknown> {
+    if (!this.connection) {
+      throw new ApplicationError("CONNECTION_ERROR", "MySQL connection is not open");
+    }
+
+    return new Promise((resolve, reject) => {
+      this.connection!.query(sql, params as never, (error, result) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(result);
+      });
+    });
   }
 }

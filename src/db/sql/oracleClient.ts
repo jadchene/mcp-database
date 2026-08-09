@@ -3,7 +3,7 @@ import { ApplicationError, toApplicationError } from "../../core/errors.js";
 import { BaseSqlAdapter } from "./baseSqlAdapter.js";
 
 export class OracleAdapter extends BaseSqlAdapter {
-  private connection: { close(): Promise<void>; execute: (...args: unknown[]) => Promise<{ rows?: unknown[] }> } | null = null;
+  private connection: OracleConnection | null = null;
 
   public constructor(private readonly oracleConfig: OracleDatabaseConfig, queryTimeoutMs: number | null) {
     super(oracleConfig, queryTimeoutMs);
@@ -16,11 +16,19 @@ export class OracleAdapter extends BaseSqlAdapter {
         ? `${this.oracleConfig.connection.host}:${this.oracleConfig.connection.port ?? 1521}/${this.oracleConfig.connection.serviceName}`
         : `${this.oracleConfig.connection.host}:${this.oracleConfig.connection.port ?? 1521}:${this.oracleConfig.connection.sid}`;
 
+      const connectTimeoutSeconds = this.oracleConfig.connection.connectTimeoutMs
+        ? Math.max(1, Math.ceil(this.oracleConfig.connection.connectTimeoutMs / 1000))
+        : undefined;
       this.connection = await oracledb.getConnection({
         user: this.oracleConfig.connection.user,
         password: this.oracleConfig.connection.password,
-        connectString
+        connectString,
+        connectTimeout: connectTimeoutSeconds,
+        transportConnectTimeout: connectTimeoutSeconds
       });
+      if (this.queryTimeoutMs) {
+        this.connection.callTimeout = this.queryTimeoutMs;
+      }
     } catch (error) {
       throw toApplicationError(error, "CONNECTION_ERROR");
     }
@@ -59,30 +67,73 @@ export class OracleAdapter extends BaseSqlAdapter {
       throw new ApplicationError("CONNECTION_ERROR", "Oracle connection is not open");
     }
 
-    const result = await this.connection.execute(sql, params ?? []);
-    const affectedRows =
-      typeof result === "object" && result !== null && "rowsAffected" in result
-        ? Number((result as { rowsAffected?: number }).rowsAffected ?? 0)
-        : null;
+    try {
+      const result = await this.connection.execute(sql, params ?? []);
+      const affectedRows =
+        typeof result === "object" && result !== null && "rowsAffected" in result
+          ? Number((result as { rowsAffected?: number }).rowsAffected ?? 0)
+          : null;
+      await this.connection.commit();
+      return { affectedRows };
+    } catch (error) {
+      await this.connection.rollback().catch(() => undefined);
+      throw error;
+    }
+  }
 
-    return { affectedRows };
+  protected override async executeLimitedQueryRaw(
+    sql: string,
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    if (!this.connection) {
+      throw new ApplicationError("CONNECTION_ERROR", "Oracle connection is not open");
+    }
+    const oracledb = await loadOracleDb(this.oracleConfig);
+    const result = await this.connection.execute(sql, params ?? [], {
+      outFormat: oracledb.OUT_FORMAT_OBJECT,
+      maxRows: maxRows + 1
+    });
+    const rows = (result.rows ?? []) as Record<string, unknown>[];
+    return {
+      rows: rows.slice(0, maxRows),
+      truncated: rows.length > maxRows
+    };
+  }
+
+  protected override async beginReadonlyTransaction(): Promise<void> {
+    await this.executeRaw("SET TRANSACTION READ ONLY");
+  }
+
+  protected override async rollbackReadonlyTransaction(): Promise<void> {
+    if (this.connection) {
+      await this.connection.rollback();
+    }
+  }
+
+  protected override async cancelCurrentOperation(): Promise<void> {
+    if (this.connection) {
+      await this.connection.break().catch(() => undefined);
+    }
   }
 
   protected override async explainQueryRows(
     sql: string,
-    params?: unknown[] | Record<string, unknown>
-  ): Promise<Record<string, unknown>[]> {
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
     await this.executeStatementRaw(`EXPLAIN PLAN FOR ${sql}`, params);
-    return this.executeRaw(`
+    return this.executeLimitedQueryRaw(`
       SELECT plan_table_output AS planLine
       FROM TABLE(DBMS_XPLAN.DISPLAY())
-    `);
+    `, undefined, maxRows);
   }
 
   protected override async analyzeQueryRows(
     _sql: string,
-    _params?: unknown[] | Record<string, unknown>
-  ): Promise<Record<string, unknown>[]> {
+    _params: unknown[] | undefined,
+    _maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
     throw new ApplicationError(
       "NOT_SUPPORTED",
       "analyze_query is not supported for Oracle in the current implementation"
@@ -222,25 +273,28 @@ let initializedOracleClient:
   | null = null;
 
 async function loadOracleDb(config: OracleDatabaseConfig): Promise<{
-  getConnection(options: Record<string, unknown>): Promise<{
-    close(): Promise<void>;
-    execute: (...args: unknown[]) => Promise<{ rows?: unknown[] }>;
-  }>;
+  getConnection(options: Record<string, unknown>): Promise<OracleConnection>;
   OUT_FORMAT_OBJECT: number;
   initOracleClient?(options?: { libDir?: string }): void;
 }> {
   const module = await import("oracledb");
   const oracledb = (module.default ?? module) as {
-    getConnection(options: Record<string, unknown>): Promise<{
-      close(): Promise<void>;
-      execute: (...args: unknown[]) => Promise<{ rows?: unknown[] }>;
-    }>;
+    getConnection(options: Record<string, unknown>): Promise<OracleConnection>;
     OUT_FORMAT_OBJECT: number;
     initOracleClient?(options?: { libDir?: string }): void;
   };
 
   initializeOracleClientIfNeeded(oracledb, config);
   return oracledb;
+}
+
+interface OracleConnection {
+  callTimeout: number;
+  close(): Promise<void>;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+  break(): Promise<void>;
+  execute: (...args: unknown[]) => Promise<{ rows?: unknown[]; rowsAffected?: number }>;
 }
 
 function initializeOracleClientIfNeeded(

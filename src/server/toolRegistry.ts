@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { summarizeDatabaseListItem, summarizeLoadedConfig } from "../config/configSummary.js";
 import type { LoadedConfig } from "../config/configTypes.js";
@@ -201,7 +202,10 @@ function makeTool<T>(
   return {
     name,
     description,
-    inputSchema: zodSchemaToJsonSchema(schema),
+    inputSchema: zodToJsonSchema(schema, {
+      target: "jsonSchema7",
+      $refStrategy: "none"
+    }) as Record<string, unknown>,
     async run(args, context) {
       const parsed = schema.safeParse(args ?? {});
       if (!parsed.success) {
@@ -213,62 +217,6 @@ function makeTool<T>(
       return handler(parsed.data, context);
     }
   };
-}
-
-function zodSchemaToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  const shape = schema instanceof z.ZodObject ? schema.shape : {};
-  const properties = Object.fromEntries(
-    Object.entries(shape).map(([key, value]) => [key, zodNodeToJsonSchema(value as z.ZodTypeAny)])
-  );
-
-  const required = Object.entries(shape)
-    .filter(([, value]) => !(value instanceof z.ZodOptional) && !(value instanceof z.ZodDefault))
-    .map(([key]) => key);
-
-  return {
-    type: "object",
-    description: readZodDescription(schema),
-    properties,
-    additionalProperties: false,
-    required
-  };
-}
-
-function zodNodeToJsonSchema(node: z.ZodTypeAny): Record<string, unknown> {
-  if (node instanceof z.ZodString) {
-    return withDescription({ type: "string" }, node);
-  }
-
-  if (node instanceof z.ZodNumber) {
-    return withDescription({ type: "number" }, node);
-  }
-
-  if (node instanceof z.ZodArray) {
-    return withDescription({
-      type: "array",
-      items: zodNodeToJsonSchema(node.element)
-    }, node);
-  }
-
-  if (node instanceof z.ZodOptional || node instanceof z.ZodDefault) {
-    if (node instanceof z.ZodOptional) {
-      return withDescription(zodNodeToJsonSchema(node.unwrap()), node);
-    }
-
-    return withDescription(zodNodeToJsonSchema((node as z.ZodDefault<z.ZodTypeAny>)._def.innerType), node);
-  }
-
-  return withDescription({}, node);
-}
-
-function withDescription(schema: Record<string, unknown>, node: z.ZodTypeAny): Record<string, unknown> {
-  const description = readZodDescription(node);
-  return description ? { ...schema, description } : schema;
-}
-
-function readZodDescription(node: z.ZodTypeAny): string | undefined {
-  const description = (node._def as { description?: string } | undefined)?.description;
-  return typeof description === "string" && description.trim() ? description : undefined;
 }
 
 function buildToolDescription(sections: {

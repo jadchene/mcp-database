@@ -1,4 +1,5 @@
 import type { Client } from "pg";
+import Cursor from "pg-cursor";
 
 import type { PostgresDatabaseConfig } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
@@ -72,18 +73,63 @@ export class PostgresAdapter extends BaseSqlAdapter {
     };
   }
 
+  protected override async executeLimitedQueryRaw(
+    sql: string,
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    if (!this.client) {
+      throw new ApplicationError("CONNECTION_ERROR", "PostgreSQL connection is not open");
+    }
+
+    const cursor = this.client.query(new Cursor(sql, params ?? []));
+    try {
+      const rows = await cursor.read(maxRows + 1) as Record<string, unknown>[];
+      return {
+        rows: rows.slice(0, maxRows),
+        truncated: rows.length > maxRows
+      };
+    } finally {
+      await cursor.close().catch(() => undefined);
+    }
+  }
+
+  protected override async beginReadonlyTransaction(): Promise<void> {
+    if (!this.client) {
+      throw new ApplicationError("CONNECTION_ERROR", "PostgreSQL connection is not open");
+    }
+    await this.client.query("BEGIN READ ONLY");
+  }
+
+  protected override async rollbackReadonlyTransaction(): Promise<void> {
+    if (this.client) {
+      await this.client.query("ROLLBACK");
+    }
+  }
+
+  protected override async cancelCurrentOperation(): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+    const client = this.client;
+    this.client = null;
+    await client.end().catch(() => undefined);
+  }
+
   protected override async explainQueryRows(
     sql: string,
-    params?: unknown[] | Record<string, unknown>
-  ): Promise<Record<string, unknown>[]> {
-    return this.executeRaw(`EXPLAIN ${sql}`, params);
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    return this.executeLimitedQueryRaw(`EXPLAIN ${sql}`, params, maxRows);
   }
 
   protected override async analyzeQueryRows(
     sql: string,
-    params?: unknown[] | Record<string, unknown>
-  ): Promise<Record<string, unknown>[]> {
-    return this.executeRaw(`EXPLAIN (ANALYZE, BUFFERS, VERBOSE) ${sql}`, params);
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    return this.executeLimitedQueryRaw(`EXPLAIN (ANALYZE, BUFFERS, VERBOSE) ${sql}`, params, maxRows);
   }
 
   protected override pingSql(): string {

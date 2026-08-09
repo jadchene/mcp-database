@@ -1,6 +1,6 @@
 import { ApplicationError } from "../core/errors.js";
 
-const ALLOWED_DIRECT_KEYWORDS = new Set(["SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN"]);
+const ALLOWED_DIRECT_KEYWORDS = new Set(["SELECT", "SHOW", "DESCRIBE", "DESC"]);
 const BLOCKED_KEYWORDS = new Set([
   "INSERT",
   "UPDATE",
@@ -40,12 +40,15 @@ export function assertReadonlySql(sql: string): void {
   }
 
   if (ALLOWED_DIRECT_KEYWORDS.has(firstKeyword)) {
+    if (!info.isReadonlyQuery) {
+      throw new ApplicationError("READONLY_VIOLATION", "The query contains a construct with write or lock side effects");
+    }
     return;
   }
 
   if (firstKeyword === "WITH") {
     const downstreamKeyword = readMainKeywordAfterWith(stripped);
-    if (downstreamKeyword === "SELECT") {
+    if (downstreamKeyword === "SELECT" && info.isReadonlyQuery) {
       return;
     }
 
@@ -71,9 +74,11 @@ export function inspectSqlStatement(sql: string): SqlStatementInfo {
     throw new ApplicationError("INVALID_ARGUMENT", "Unable to determine SQL statement type");
   }
 
+  const hasUnsafeReadonlyConstruct = containsUnsafeReadonlyConstruct(stripped);
   const isReadonlyQuery =
-    ALLOWED_DIRECT_KEYWORDS.has(firstKeyword) ||
-    (firstKeyword === "WITH" && readMainKeywordAfterWith(stripped) === "SELECT");
+    !hasUnsafeReadonlyConstruct &&
+    (ALLOWED_DIRECT_KEYWORDS.has(firstKeyword) ||
+      (firstKeyword === "WITH" && readMainKeywordAfterWith(stripped) === "SELECT"));
   const hasWhereClause = hasTopLevelKeyword(stripped, "WHERE");
   const riskReasons = collectRiskReasons(firstKeyword, hasWhereClause);
   const riskLevel = determineRiskLevel(firstKeyword, riskReasons);
@@ -86,6 +91,138 @@ export function inspectSqlStatement(sql: string): SqlStatementInfo {
     riskLevel,
     riskReasons
   };
+}
+
+function containsUnsafeReadonlyConstruct(sql: string): boolean {
+  const words = readSqlWords(sql);
+
+  if (words[0] === "SHOW" || words[0] === "DESCRIBE" || words[0] === "DESC") {
+    return false;
+  }
+
+  if (words.some((word) => BLOCKED_KEYWORDS.has(word))) {
+    return true;
+  }
+
+  for (let index = 0; index < words.length; index += 1) {
+    const current = words[index];
+    const next = words[index + 1];
+    const afterNext = words[index + 2];
+
+    // PostgreSQL SELECT INTO creates a table. MySQL INTO OUTFILE/DUMPFILE
+    // writes on the database host. INTO variables are also stateful, so the
+    // read tool rejects every SELECT INTO form conservatively.
+    if (current === "SELECT" && words.slice(index + 1).includes("INTO")) {
+      return true;
+    }
+
+    if (current === "INTO" && (next === "OUTFILE" || next === "DUMPFILE")) {
+      return true;
+    }
+
+    if (current === "FOR" && (next === "UPDATE" || next === "SHARE")) {
+      return true;
+    }
+
+    if (current === "LOCK" && next === "IN" && afterNext === "SHARE") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Extract unquoted SQL words while ignoring comments and the common quoting
+ * forms used by the supported dialects. This is deliberately conservative;
+ * database-level read-only transactions remain the authoritative boundary.
+ */
+function readSqlWords(sql: string): string[] {
+  const words: string[] = [];
+  let index = 0;
+
+  while (index < sql.length) {
+    const current = sql[index]!;
+    const next = sql[index + 1];
+
+    if (current === "-" && next === "-") {
+      const end = sql.indexOf("\n", index + 2);
+      index = end === -1 ? sql.length : end + 1;
+      continue;
+    }
+
+    if (current === "/" && next === "*") {
+      const end = sql.indexOf("*/", index + 2);
+      if (end === -1) {
+        throw new ApplicationError("READONLY_VIOLATION", "Unclosed SQL comment");
+      }
+      index = end + 2;
+      continue;
+    }
+
+    if (current === "'") {
+      index = skipQuoted(sql, index, "'");
+      continue;
+    }
+
+    if (current === "\"") {
+      index = skipQuoted(sql, index, "\"");
+      continue;
+    }
+
+    if (current === "`") {
+      index = skipQuoted(sql, index, "`");
+      continue;
+    }
+
+    if (current === "[") {
+      const end = sql.indexOf("]", index + 1);
+      index = end === -1 ? sql.length : end + 1;
+      continue;
+    }
+
+    if (current === "$") {
+      const tagMatch = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(index));
+      if (tagMatch) {
+        const tag = tagMatch[0];
+        const end = sql.indexOf(tag, index + tag.length);
+        index = end === -1 ? sql.length : end + tag.length;
+        continue;
+      }
+    }
+
+    if (/[A-Za-z_]/.test(current)) {
+      const match = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(sql.slice(index));
+      if (match) {
+        words.push(match[0].toUpperCase());
+        index += match[0].length;
+        continue;
+      }
+    }
+
+    index += 1;
+  }
+
+  return words;
+}
+
+function skipQuoted(sql: string, start: number, quote: "'" | "\"" | "`"): number {
+  let index = start + 1;
+  while (index < sql.length) {
+    if (sql[index] !== quote) {
+      index += 1;
+      continue;
+    }
+
+    if (sql[index + 1] === quote) {
+      index += 2;
+      continue;
+    }
+
+    return index + 1;
+  }
+
+  return sql.length;
 }
 
 function collectRiskReasons(firstKeyword: string, hasWhereClause: boolean): string[] {

@@ -7,7 +7,8 @@ export type ErrorCode =
   | "NOT_SUPPORTED"
   | "CONNECTION_ERROR"
   | "QUERY_ERROR"
-  | "TIMEOUT";
+  | "TIMEOUT"
+  | "EXECUTION_OUTCOME_UNKNOWN";
 
 /**
  * ApplicationError is the single normalized error type used across the service.

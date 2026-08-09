@@ -108,7 +108,15 @@ export class RedisAdapter implements RedisDatabaseAdapter {
     }
 
     return new Promise<T>((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        const client = this.client;
+        this.client = null;
+        client?.destroy();
         reject(
           new ApplicationError("TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
             operation,
@@ -121,10 +129,18 @@ export class RedisAdapter implements RedisDatabaseAdapter {
 
       void action()
         .then((value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           clearTimeout(timer);
           resolve(value);
         })
         .catch((error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           clearTimeout(timer);
           reject(error);
         });

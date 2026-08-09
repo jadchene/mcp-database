@@ -15,13 +15,17 @@ import type {
   TableStatistics,
   TableInfo
 } from "../../core/resultTypes.js";
-import { normalizeRows } from "../../utils/normalize.js";
+import { normalizeDatabaseBoolean, normalizeRows } from "../../utils/normalize.js";
 import { assertReadonlySql, inspectSqlStatement } from "../readonlyGuard.js";
 import type { SqlDatabaseAdapter } from "../types.js";
 
 type ExecuteRawResult = Record<string, unknown>[];
 type ExecuteStatementRawResult = {
   affectedRows: number | null;
+};
+type LimitedQueryRawResult = {
+  rows: Record<string, unknown>[];
+  truncated: boolean;
 };
 
 /**
@@ -51,15 +55,29 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     params?: unknown[] | Record<string, unknown>
   ): Promise<ExecuteStatementRawResult>;
 
+  protected abstract executeLimitedQueryRaw(
+    sql: string,
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<LimitedQueryRawResult>;
+
+  protected abstract beginReadonlyTransaction(): Promise<void>;
+
+  protected abstract rollbackReadonlyTransaction(): Promise<void>;
+
+  protected abstract cancelCurrentOperation(): Promise<void>;
+
   protected abstract explainQueryRows(
     sql: string,
-    params?: unknown[] | Record<string, unknown>
-  ): Promise<ExecuteRawResult>;
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<LimitedQueryRawResult>;
 
   protected abstract analyzeQueryRows(
     sql: string,
-    params?: unknown[] | Record<string, unknown>
-  ): Promise<ExecuteRawResult>;
+    params: unknown[] | undefined,
+    maxRows: number
+  ): Promise<LimitedQueryRawResult>;
 
   protected abstract pingSql(): string;
 
@@ -154,7 +172,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     return rows.map((row) => ({
       name: String(row.name ?? row.NAME ?? row.column_name ?? row.COLUMN_NAME),
       dataType: String(row.dataType ?? row.datatype ?? row.DATATYPE ?? row.data_type ?? row.DATA_TYPE),
-      nullable: String(row.nullable ?? row.IS_NULLABLE ?? row.NULLABLE).toUpperCase() !== "N",
+      nullable: normalizeDatabaseBoolean(row.nullable ?? row.IS_NULLABLE ?? row.NULLABLE, true),
       defaultValue:
         row.defaultValue !== undefined && row.defaultValue !== null
           ? String(row.defaultValue)
@@ -171,12 +189,10 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
           : row.COMMENTS !== undefined && row.COMMENTS !== null
             ? String(row.COMMENTS)
             : null,
-      primaryKey:
-        row.primaryKey === true ||
-        row.PRIMARY_KEY === true ||
-        row.primarykey === true ||
-        row.primary_key === true ||
-        String(row.primaryKey ?? row.PRIMARY_KEY ?? row.primarykey ?? row.primary_key ?? row.is_primary_key ?? "0") === "1"
+      primaryKey: normalizeDatabaseBoolean(
+        row.primaryKey ?? row.PRIMARY_KEY ?? row.primarykey ?? row.primary_key ?? row.is_primary_key,
+        false
+      )
     }));
   }
 
@@ -218,11 +234,11 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
               : null,
       isUnique:
         row.isUnique !== undefined && row.isUnique !== null
-          ? Boolean(row.isUnique)
+          ? normalizeDatabaseBoolean(row.isUnique)
           : row.IS_UNIQUE !== undefined && row.IS_UNIQUE !== null
-            ? Boolean(row.IS_UNIQUE)
+            ? normalizeDatabaseBoolean(row.IS_UNIQUE)
             : row.is_unique !== undefined && row.is_unique !== null
-              ? Boolean(row.is_unique)
+              ? normalizeDatabaseBoolean(row.is_unique)
               : null,
       columnPosition:
         row.columnPosition !== undefined && row.columnPosition !== null
@@ -303,16 +319,15 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         params: params ?? [],
         maxRows
       });
-      const rows = await this.runWithTimeout("explain_query", sql, params, () =>
-        this.explainQueryRows(sql, params)
+      const result = await this.runWithTimeout("explain_query", sql, params, () =>
+        this.explainQueryRows(sql, params, maxRows)
       );
-      const normalizedRows = normalizeRows(rows);
-      const limitedRows = normalizedRows.slice(0, maxRows);
+      const limitedRows = normalizeRows(result.rows);
 
       return {
-        rowCount: normalizedRows.length,
+        rowCount: limitedRows.length,
         rows: limitedRows,
-        truncated: normalizedRows.length > maxRows
+        truncated: result.truncated
       };
     } catch (error) {
       throw toApplicationError(error, "QUERY_ERROR");
@@ -332,16 +347,15 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         params: params ?? [],
         maxRows
       });
-      const rows = await this.runWithTimeout("analyze_query", sql, params, () =>
-        this.analyzeQueryRows(sql, params)
+      const result = await this.runWithTimeout("analyze_query", sql, params, () =>
+        this.withReadonlyTransaction(() => this.analyzeQueryRows(sql, params, maxRows))
       );
-      const normalizedRows = normalizeRows(rows);
-      const limitedRows = normalizedRows.slice(0, maxRows);
+      const limitedRows = normalizeRows(result.rows);
 
       return {
-        rowCount: normalizedRows.length,
+        rowCount: limitedRows.length,
         rows: limitedRows,
-        truncated: normalizedRows.length > maxRows
+        truncated: result.truncated
       };
     } catch (error) {
       throw toApplicationError(error, "QUERY_ERROR");
@@ -357,14 +371,15 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         params: params ?? [],
         maxRows
       });
-      const rows = await this.runWithTimeout("execute_query", sql, params, () => this.executeRaw(sql, params));
-      const normalizedRows = normalizeRows(rows);
-      const limitedRows = normalizedRows.slice(0, maxRows);
+      const result = await this.runWithTimeout("execute_query", sql, params, () =>
+        this.withReadonlyTransaction(() => this.executeLimitedQueryRaw(sql, params, maxRows))
+      );
+      const limitedRows = normalizeRows(result.rows);
 
       return {
-        rowCount: normalizedRows.length,
+        rowCount: limitedRows.length,
         rows: limitedRows,
-        truncated: normalizedRows.length > maxRows
+        truncated: result.truncated
       };
     } catch (error) {
       throw toApplicationError(error, "QUERY_ERROR");
@@ -407,27 +422,52 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
 
     return new Promise<T>((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => {
-        reject(
-          new ApplicationError("TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        void this.cancelCurrentOperation().finally(() => {
+          const isWrite = operation === "execute_statement";
+          reject(
+            new ApplicationError(isWrite ? "EXECUTION_OUTCOME_UNKNOWN" : "TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
             operation,
             databaseKey: this.config.key,
-            sql,
-            params: params ?? [],
+            sqlLength: sql.length,
+            parameterCount: Array.isArray(params) ? params.length : Object.keys(params ?? {}).length,
             timeoutMs
           })
-        );
+          );
+        });
       }, timeoutMs);
 
       void action()
         .then((value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           clearTimeout(timer);
           resolve(value);
         })
         .catch((error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           clearTimeout(timer);
           reject(error);
         });
     });
+  }
+
+  private async withReadonlyTransaction<T>(action: () => Promise<T>): Promise<T> {
+    await this.beginReadonlyTransaction();
+    try {
+      return await action();
+    } finally {
+      await this.rollbackReadonlyTransaction();
+    }
   }
 }

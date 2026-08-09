@@ -191,8 +191,6 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
   );
 
   process.once("exit", disposeWatcher);
-  process.once("SIGINT", disposeWatcher);
-  process.once("SIGTERM", disposeWatcher);
 
   const server = new Server(
     {
@@ -336,6 +334,31 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  let shutdownInFlight: Promise<void> | null = null;
+  const shutdown = (): Promise<void> => {
+    if (shutdownInFlight) {
+      return shutdownInFlight;
+    }
+    shutdownInFlight = (async () => {
+      disposeWatcher();
+      pendingStatementConfirmations.clear();
+      await server.close();
+    })();
+    return shutdownInFlight;
+  };
+  const handleSignal = (): void => {
+    void shutdown()
+      .then(() => process.exit(0))
+      .catch((error) => {
+        log("error", "Failed to shut down MCP database server cleanly", {
+          cause: error instanceof Error ? error.name : "UnknownError"
+        });
+        process.exit(1);
+      });
+  };
+  process.once("SIGINT", handleSignal);
+  process.once("SIGTERM", handleSignal);
   return server;
 }
 

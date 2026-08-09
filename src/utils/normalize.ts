@@ -35,3 +35,24 @@ export function normalizeValue(value: unknown): unknown {
 export function normalizeRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
   return rows.map((row) => normalizeValue(row) as Record<string, unknown>);
 }
+
+export function normalizeDatabaseBoolean(value: unknown, defaultValue = false): boolean {
+  if (value === null || value === undefined || value === "") {
+    return defaultValue;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+
+  const normalized = String(value).trim().toUpperCase();
+  if (["Y", "YES", "TRUE", "1"].includes(normalized)) {
+    return true;
+  }
+  if (["N", "NO", "FALSE", "0"].includes(normalized)) {
+    return false;
+  }
+  return defaultValue;
+}
