@@ -5,7 +5,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-test("server exits cleanly after one SIGINT", { timeout: 10_000 }, async () => {
+test("server exits cleanly after one SIGINT", {
+  timeout: 10_000,
+  skip: process.platform === "win32"
+    ? "Node terminates Windows child processes directly instead of delivering SIGINT to their handlers"
+    : false
+}, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "mcp-database-shutdown-"));
   const configPath = path.join(directory, "databases.json");
   await writeFile(configPath, JSON.stringify({
