@@ -120,7 +120,24 @@ const rootConfigSchema = z.object({
     .object({
       timeoutMs: z.number().int().positive().optional()
     })
-    .default({})
+    .default({}),
+  confirmation: z
+    .object({
+      requireUserToken: z.boolean().default(false),
+      password: z.string().min(8).max(1024).optional()
+    })
+    .superRefine((value, context) => {
+      if (value.requireUserToken && !value.password) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["password"],
+          message: "confirmation.password is required when requireUserToken is true"
+        });
+      }
+    })
+    .default({
+      requireUserToken: false
+    })
 }).strict();
 
 /**
@@ -152,6 +169,10 @@ export function validateDatabaseConfig(rawConfig: unknown): RootConfig {
     },
     query: {
       timeoutMs: parsed.data.query.timeoutMs
+    },
+    confirmation: {
+      requireUserToken: parsed.data.confirmation.requireUserToken,
+      password: parsed.data.confirmation.password
     }
   };
 }

@@ -65,6 +65,9 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
     query: {
       timeoutMs: validatedConfig.query.timeoutMs ?? null
     },
+    confirmation: {
+      requireUserToken: validatedConfig.confirmation.requireUserToken
+    },
     databases: databases.map((item) => ({
       key: item.key,
       type: item.type,
@@ -83,6 +86,10 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
     },
     query: {
       timeoutMs: validatedConfig.query.timeoutMs ?? null
+    },
+    confirmation: {
+      requireUserToken: validatedConfig.confirmation.requireUserToken,
+      password: validatedConfig.confirmation.password
     }
   };
 }

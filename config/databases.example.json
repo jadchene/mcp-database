@@ -6,6 +6,10 @@
   "query": {
     "timeoutMs": 5000
   },
+  "confirmation": {
+    "requireUserToken": false,
+    "password": "replace-with-a-private-password"
+  },
   "databases": [
     {
       "key": "main-mysql",

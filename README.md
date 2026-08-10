@@ -74,6 +74,10 @@ Minimal SQL target example:
   "query": {
     "timeoutMs": 5000
   },
+  "confirmation": {
+    "requireUserToken": false,
+    "password": "replace-with-a-private-password"
+  },
   "databases": [
     {
       "key": "main-mysql",
@@ -95,6 +99,8 @@ Minimal SQL target example:
 `logging.enabled` defaults to `false`. When enabled, logs are written to the system temporary directory unless `logging.directory` is set. Relative log directories are resolved from the config file location.
 
 `query.timeoutMs` is optional. When set, the server applies that timeout to database operations and interrupts the active connection after expiry. A timed-out write returns `EXECUTION_OUTCOME_UNKNOWN`, so callers can verify the result instead of retrying blindly.
+
+`confirmation.requireUserToken` defaults to `false`. When it is `false`, write confirmation behaves as described by the normal interactive and two-step flows below. Set it to `true` to require a separate user-generated token on the second call. In that mode, `confirmation.password` is required and must contain at least eight characters. The password is never returned by MCP tools or configuration summaries.
 
 ## Supported Databases
 
@@ -185,6 +191,20 @@ Redis:
 - When elicitation is not available, the server uses the same explicit two-step confirmation model as other high-risk MCP tools: the first call returns confirmation details and a `confirmationId`; the second call must repeat the same `databaseKey`, `sql`, and `params`, then pass that `confirmationId` with `confirmExecution: true`.
 - The server verifies that the second call matches the original pending request before execution.
 - Confirmation details include SQL type, target object, SQL preview, parameter preview, risk level, and risk hints for dangerous statements such as `UPDATE` or `DELETE` without `WHERE`.
+
+### Optional User-Token Confirmation
+
+When `confirmation.requireUserToken` is `true`, the server always uses the two-step path, even if the MCP client supports elicitation. A `confirmationId` by itself cannot authorize the write.
+
+After reviewing the pending SQL details, the user personally runs this command in a terminal:
+
+```text
+mcp-database-service gen <confirmationId>
+```
+
+The terminal then prompts for `confirmation.password` without echoing the input. After the user presses Enter, it prints a short-lived token. The user gives that token to the agent, and the agent repeats the same `execute_statement` call with `confirmationId`, `confirmExecution: true`, and `userToken`.
+
+The token is bound to that pending confirmation, expires with it, and is consumed after one successful validation. The private generation command is documented only here; it is intentionally absent from MCP tool descriptions, the packaged Skill, and CLI help output.
 
 ## Config Reload
 

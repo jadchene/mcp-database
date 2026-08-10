@@ -21,6 +21,9 @@ export function summarizeLoadedConfig(config: LoadedConfig): Record<string, unkn
     query: {
       timeoutMs: config.query.timeoutMs
     },
+    confirmation: {
+      requireUserToken: config.confirmation.requireUserToken
+    },
     items: config.databases.map((database) => summarizeDatabaseConfig(database))
   };
 }

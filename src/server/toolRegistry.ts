@@ -124,7 +124,13 @@ const executeStatementSchema = z.object({
   confirmExecution: z
     .boolean()
     .optional()
-    .describe("Set this to the JSON boolean value true on the second execute_statement call after the user explicitly confirms execution again. Do not pass the string \"true\". Do not send confirmExecution=true on the first call.")
+    .describe("Set this to the JSON boolean value true on the second execute_statement call after the user explicitly confirms execution again. Do not pass the string \"true\". Do not send confirmExecution=true on the first call."),
+  userToken: z
+    .string()
+    .length(43)
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .optional()
+    .describe("User-provided authorization token required on the second call when the service reports that user-token confirmation is enabled. Ask the user to provide it; never invent or derive it.")
 }).strict();
 const redisKeySchema = z.object({
   databaseKey: z
@@ -170,12 +176,13 @@ type ToolExecutionContext = {
     params?: unknown[];
     confirmationId?: string;
     confirmExecution?: boolean;
+    userToken?: string;
   }): Promise<
     | { status: "confirmed"; databaseFingerprint: string }
     | {
       status: "pending";
       confirmationId: string;
-      confirmationMode: "two_step";
+      confirmationMode: "two_step" | "user_token";
       message: string;
       statement: string;
       targetObject: string;
@@ -1096,7 +1103,7 @@ export function buildToolRegistry(): ToolDefinition[] {
         whenNotToUse:
           "Do not use this for SELECT or other readonly SQL. Do not use it on targets configured as readonly. Avoid it unless a write is truly required.",
         inputExpectations:
-          "Requires databaseKey using the configured writable SQL target key from list_databases.key, plus one non-query SQL statement. Manual user confirmation is always required before execution. If the client supports interactive confirmation, the server requests it directly. Otherwise this becomes a strict two-step flow: the first call returns confirmation details and a confirmationId, and that confirmationId is not final authorization. After the confirmationId is returned, ask the user again for a second explicit approval, then make the second call with the same databaseKey, the same sql, the same params, the returned confirmationId, and confirmExecution set to the JSON boolean true. Never treat the user's original write request as that second confirmation, and never pass the string \"true\" for confirmExecution. High-risk statements such as UPDATE or DELETE without WHERE are specially highlighted. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
+          "Requires databaseKey using the configured writable SQL target key from list_databases.key, plus one non-query SQL statement. Manual user confirmation is always required before execution. The first call may return confirmation details and a confirmationId, and that confirmationId is not final authorization. Ask the user for the required second approval. If the response says a user-provided authorization token is required, ask the user to provide that token and include it as userToken on the second call; never invent or derive it. The second call must repeat the same databaseKey, sql, params, and confirmationId, with confirmExecution set to the JSON boolean true. Never treat the user's original write request as the second confirmation, and never pass the string \"true\" for confirmExecution. High-risk statements such as UPDATE or DELETE without WHERE are specially highlighted. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
         databaseSupport: "Writable SQL targets only: MySQL, Oracle, PostgreSQL, and openGauss when readonly is false."
       }),
       executeStatementSchema,
@@ -1106,7 +1113,8 @@ export function buildToolRegistry(): ToolDefinition[] {
         sql: args.sql,
         params: args.params,
         confirmationId: args.confirmationId,
-        confirmExecution: args.confirmExecution
+        confirmExecution: args.confirmExecution,
+        userToken: args.userToken
       });
 
       if (confirmation.status === "pending") {

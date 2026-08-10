@@ -19,6 +19,9 @@ async function main() {
     query: {
       timeoutMs: 3000
     },
+    confirmation: {
+      requireUserToken: false
+    },
     databases: [
       {
         key: "mysql-alpha",
@@ -43,6 +46,10 @@ async function main() {
     query: {
       timeoutMs: 4500
     },
+    confirmation: {
+      requireUserToken: true,
+      password: "reload-private-password"
+    },
     databases: [
       ...initialConfig.databases,
       {
@@ -62,6 +69,9 @@ async function main() {
     },
     query: {
       timeoutMs: 2000
+    },
+    confirmation: {
+      requireUserToken: false
     },
     databases: [
       {
@@ -107,6 +117,7 @@ async function main() {
     assert.equal(initialSummary.databaseCount, 1);
     assert.equal(initialSummary.logging?.enabled, true);
     assert.equal(initialSummary.query?.timeoutMs, 3000);
+    assert.equal(initialSummary.confirmation?.requireUserToken, false);
     assert.equal(initialSummary.items[0]?.key, "mysql-alpha");
     assert.equal(initialSummary.items[0]?.connection?.databaseName, "alpha_db");
 
@@ -115,6 +126,8 @@ async function main() {
     assert.equal(watchedSummary.logging?.enabled, true);
     assert.match(String(watchedSummary.logging?.directory), /logs/i);
     assert.equal(watchedSummary.query?.timeoutMs, 4500);
+    assert.equal(watchedSummary.confirmation?.requireUserToken, true);
+    assert.equal(JSON.stringify(watchedSummary).includes("reload-private-password"), false);
     assert.equal(watchedSummary.items[1]?.key, "redis-beta");
     assert.match(String(watchedSummary.items[1]?.connection?.url), /\*\*\*/);
 
@@ -129,6 +142,7 @@ async function main() {
     assert.equal(manualSummary.databaseCount, 1);
     assert.equal(manualSummary.logging?.enabled, false);
     assert.equal(manualSummary.query?.timeoutMs, 2000);
+    assert.equal(manualSummary.confirmation?.requireUserToken, false);
     assert.equal(manualSummary.items[0]?.key, "oracle-gamma");
     assert.equal(manualSummary.items[0]?.connection?.serviceName, "XEPDB1");
   } finally {
@@ -145,6 +159,7 @@ async function main() {
       "automatic config reload after valid file change",
       "logging summary in show_loaded_config",
       "query timeout summary in show_loaded_config",
+      "user-token confirmation summary without password disclosure",
       "sanitized connection summary in show_loaded_config",
       "invalid auto-reload keeps previous in-memory config",
       "manual reload_config replaces in-memory config"

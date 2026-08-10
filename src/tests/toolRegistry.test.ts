@@ -11,6 +11,13 @@ function propertiesFor(toolName: string): Record<string, Record<string, unknown>
 
 test("execute_statement exposes confirmExecution as a boolean", () => {
   assert.equal(propertiesFor("execute_statement").confirmExecution?.type, "boolean");
+  assert.equal(propertiesFor("execute_statement").userToken?.type, "string");
+});
+
+test("MCP tool metadata does not reveal how user authorization tokens are generated", () => {
+  const metadata = JSON.stringify(buildToolRegistry());
+  assert.equal(metadata.includes("mcp-database-service gen"), false);
+  assert.equal(metadata.includes("<confirmationId>"), false);
 });
 
 test("query and scan schemas expose integer bounds", () => {

@@ -74,6 +74,10 @@ MCP_DATABASE_CONFIG=./config/databases.json mcp-database-service
   "query": {
     "timeoutMs": 5000
   },
+  "confirmation": {
+    "requireUserToken": false,
+    "password": "replace-with-a-private-password"
+  },
   "databases": [
     {
       "key": "main-mysql",
@@ -95,6 +99,8 @@ MCP_DATABASE_CONFIG=./config/databases.json mcp-database-service
 `logging.enabled` 默认为 `false`。启用后，如果没有设置 `logging.directory`，日志会写入系统临时目录。相对日志目录会按配置文件所在目录解析。
 
 `query.timeoutMs` 是可选项。设置后，服务会把该超时时间应用到数据库操作上，并在超时后中断当前连接。写入超时会返回 `EXECUTION_OUTCOME_UNKNOWN`，表示调用方应核验结果而不是盲目重试。
+
+`confirmation.requireUserToken` 默认为 `false`。关闭时，写入确认逻辑与下文现有的交互确认和两步确认流程一致。设置为 `true` 后，第二次调用必须携带由用户单独生成的口令；此时必须配置至少 8 个字符的 `confirmation.password`。MCP 工具和配置摘要都不会返回该密码。
 
 ## 支持的数据库
 
@@ -185,6 +191,20 @@ Redis：
 - 当客户端不支持 elicitation 时，服务使用和其他高风险 MCP 工具一致的显式两步确认模型：第一次调用返回确认详情和 `confirmationId`；第二次调用必须重复相同的 `databaseKey`、`sql` 和 `params`，并携带该 `confirmationId` 与 `confirmExecution: true`。
 - 服务会校验第二次调用是否与原始待确认请求完全匹配，然后才执行。
 - 确认信息包含 SQL 类型、目标对象、SQL 预览、参数预览、风险等级，以及 `UPDATE` 或 `DELETE` 不带 `WHERE` 等危险语句的风险提示。
+
+### 可选的用户口令确认
+
+当 `confirmation.requireUserToken` 为 `true` 时，即使 MCP 客户端支持 elicitation，服务也始终使用两步流程。只有 `confirmationId` 不能授权写入。
+
+用户检查待确认 SQL 的详细信息后，需要亲自在终端执行：
+
+```text
+mcp-database-service gen <confirmationId>
+```
+
+终端随后会提示输入 `confirmation.password`，输入过程不会回显。用户按回车后，终端会显示一串短期口令。用户把该口令交给 Agent，Agent 再使用完全相同的 `databaseKey`、`sql`、`params` 和 `confirmationId` 调用 `execute_statement`，同时携带 `confirmExecution: true` 与 `userToken`。
+
+口令只绑定当前待确认请求，随待确认请求一起过期，并在一次成功校验后立即失效。该私有生成命令只在本文档说明，不会出现在 MCP 工具描述、随包发布的 Skill 或 CLI 帮助输出中。
 
 ## 配置刷新
 

@@ -11,6 +11,7 @@ import { inspectSqlStatement } from "../db/readonlyGuard.js";
 import type { LoadedConfig } from "../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../core/errors.js";
 import { log } from "../core/logger.js";
+import { consumeUserAuthorization, prepareUserAuthorization } from "../core/userAuthorization.js";
 import { createClient } from "../db/clientFactory.js";
 import type { RedisDatabaseAdapter, SqlDatabaseAdapter } from "../db/types.js";
 import { buildToolRegistry } from "./toolRegistry.js";
@@ -19,6 +20,7 @@ import { SERVICE_NAME, SERVICE_VERSION } from "../version.js";
 interface PendingStatementConfirmation {
   databaseKey: string;
   databaseFingerprint: string;
+  requiresUserToken: boolean;
   sql: string;
   params?: unknown[];
   expiresAt: number;
@@ -30,6 +32,7 @@ interface StatementConfirmationInput {
   params?: unknown[];
   confirmationId?: string;
   confirmExecution?: boolean;
+  userToken?: string;
 }
 
 interface StatementConfirmationContext {
@@ -37,7 +40,10 @@ interface StatementConfirmationContext {
   input: StatementConfirmationInput;
   pendingConfirmations: Map<string, PendingStatementConfirmation>;
   supportsInteractiveConfirmation: boolean;
+  requireUserToken?: boolean;
   elicitConfirmation?: (message: string) => Promise<boolean>;
+  prepareUserToken?: (confirmationId: string, expiresAt: number) => Promise<void>;
+  verifyUserToken?: (confirmationId: string, token: string) => Promise<boolean>;
   now?: () => number;
   createId?: () => string;
   maxPendingConfirmations?: number;
@@ -48,7 +54,7 @@ type StatementConfirmationResult =
   | {
     status: "pending";
     confirmationId: string;
-    confirmationMode: "two_step";
+    confirmationMode: "two_step" | "user_token";
     message: string;
     statement: string;
     targetObject: string;
@@ -259,7 +265,16 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
             input,
             pendingConfirmations: pendingStatementConfirmations,
             supportsInteractiveConfirmation: Boolean(clientCapabilities?.elicitation),
+            requireUserToken: currentConfig.confirmation.requireUserToken,
             maxPendingConfirmations: MAX_PENDING_STATEMENT_CONFIRMATIONS,
+            prepareUserToken: async (confirmationId, expiresAt) => {
+              const password = currentConfig.confirmation.password;
+              if (!password) {
+                throw new ApplicationError("CONFIG_ERROR", "User-token confirmation is not configured correctly");
+              }
+              await prepareUserAuthorization(confirmationId, password, expiresAt);
+            },
+            verifyUserToken: (confirmationId, token) => consumeUserAuthorization(confirmationId, token),
             elicitConfirmation: async (message) => {
               const confirmation = await server.elicitInput({
                 mode: "form",
@@ -457,7 +472,10 @@ export async function confirmStatementExecutionWithFallback(
     input,
     pendingConfirmations,
     supportsInteractiveConfirmation,
+    requireUserToken = false,
     elicitConfirmation,
+    prepareUserToken,
+    verifyUserToken,
     now = () => Date.now(),
     createId = createConfirmationId,
     maxPendingConfirmations = MAX_PENDING_STATEMENT_CONFIRMATIONS
@@ -484,7 +502,7 @@ export async function confirmStatementExecutionWithFallback(
 
   cleanupExpiredConfirmations(pendingConfirmations, now());
 
-  if (supportsInteractiveConfirmation && elicitConfirmation) {
+  if (!requireUserToken && supportsInteractiveConfirmation && elicitConfirmation) {
     try {
       const confirmed = await elicitConfirmation(buildInteractiveConfirmationMessage(input));
       if (!confirmed) {
@@ -543,13 +561,37 @@ export async function confirmStatementExecutionWithFallback(
       );
     }
 
+    if (pending.requiresUserToken !== requireUserToken) {
+      pendingConfirmations.delete(input.confirmationId);
+      throw new ApplicationError(
+        "INVALID_ARGUMENT",
+        "Write confirmation settings changed; request confirmation again"
+      );
+    }
+
+    if (pending.requiresUserToken) {
+      if (!input.userToken || !verifyUserToken) {
+        throw new ApplicationError(
+          "INVALID_ARGUMENT",
+          "A user-provided authorization token is required for this write confirmation"
+        );
+      }
+
+      if (!(await verifyUserToken(input.confirmationId, input.userToken))) {
+        throw new ApplicationError(
+          "INVALID_ARGUMENT",
+          "The user-provided authorization token is invalid or expired"
+        );
+      }
+    }
+
     pendingConfirmations.delete(input.confirmationId);
     log("info", "Write statement confirmed through two-step confirmation", {
       toolName: "execute_statement",
       databaseKey: input.databaseKey,
       sql: input.sql,
       params: input.params ?? [],
-      confirmationMode: "two_step",
+      confirmationMode: pending.requiresUserToken ? "user_token" : "two_step",
       confirmationId: input.confirmationId
     });
     return { status: "confirmed", databaseFingerprint };
@@ -563,12 +605,20 @@ export async function confirmStatementExecutionWithFallback(
   }
 
   const confirmationId = createId();
+  const expiresAt = now() + PENDING_CONFIRMATION_TTL_MS;
+  if (requireUserToken) {
+    if (!prepareUserToken) {
+      throw new ApplicationError("CONFIG_ERROR", "User-token confirmation is not available");
+    }
+    await prepareUserToken(confirmationId, expiresAt);
+  }
   pendingConfirmations.set(confirmationId, {
     databaseKey: input.databaseKey,
     databaseFingerprint,
+    requiresUserToken: requireUserToken,
     sql: input.sql,
     params: input.params,
-    expiresAt: now() + PENDING_CONFIRMATION_TTL_MS
+    expiresAt
   });
 
   log("info", "Write statement waiting for two-step confirmation", {
@@ -576,7 +626,7 @@ export async function confirmStatementExecutionWithFallback(
     databaseKey: input.databaseKey,
     sql: input.sql,
     params: input.params ?? [],
-    confirmationMode: "two_step",
+    confirmationMode: requireUserToken ? "user_token" : "two_step",
     confirmationId,
     riskLevel: statement.riskLevel
   });
@@ -584,9 +634,11 @@ export async function confirmStatementExecutionWithFallback(
   return {
     status: "pending",
     confirmationId,
-    confirmationMode: "two_step",
+    confirmationMode: requireUserToken ? "user_token" : "two_step",
     message:
-      "This MCP client does not support interactive confirmation. Ask the user whether to execute the statement, then call execute_statement again with the same databaseKey, sql, params, confirmationId, and confirmExecution=true.",
+      requireUserToken
+        ? "Ask the user to provide an authorization token for this pending write, then call execute_statement again with the same databaseKey, sql, params, confirmationId, confirmExecution=true, and the user-provided token."
+        : "This MCP client does not support interactive confirmation. Ask the user whether to execute the statement, then call execute_statement again with the same databaseKey, sql, params, confirmationId, and confirmExecution=true.",
     statement: statement.firstKeyword,
     targetObject,
     riskLevel: statement.riskLevel,
@@ -605,6 +657,10 @@ function summarizeToolArguments(args: unknown): Record<string, unknown> {
   const summary: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(objectArgs)) {
+    if (key === "userToken") {
+      summary.userToken = "[REDACTED]";
+      continue;
+    }
     if (key === "sql" && typeof value === "string") {
       summary.sql = value;
       continue;

@@ -75,10 +75,16 @@ export interface QueryConfig {
   timeoutMs?: number;
 }
 
+export interface ConfirmationConfig {
+  requireUserToken: boolean;
+  password?: string;
+}
+
 export interface RootConfig {
   databases: DatabaseConfig[];
   logging: LoggingConfig;
   query: QueryConfig;
+  confirmation: ConfirmationConfig;
 }
 
 export interface LoadedConfig {
@@ -92,4 +98,5 @@ export interface LoadedConfig {
   query: {
     timeoutMs: number | null;
   };
+  confirmation: ConfirmationConfig;
 }
