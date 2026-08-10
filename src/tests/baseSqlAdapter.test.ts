@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import type { MysqlDatabaseConfig } from "../config/configTypes.js";
 import { BaseSqlAdapter } from "../db/sql/baseSqlAdapter.js";
+import { MysqlAdapter } from "../db/sql/mysqlClient.js";
 
 const config: MysqlDatabaseConfig = {
   key: "writable",
@@ -39,13 +40,29 @@ test("write timeout cancels the operation and reports an unknown outcome", async
   assert.ok(adapter.events.includes("cancel"));
 });
 
+test("listSchemas maps the lowercase schema_name returned by MySQL", async () => {
+  const adapter = new FakeSqlAdapter(config, null, 0, [{ schema_name: "application" }]);
+
+  assert.deepEqual(await adapter.listSchemas(), [{ schema: "application" }]);
+});
+
+test("MySQL listSchemas query avoids the reserved schema alias", () => {
+  const adapter = new TestableMysqlAdapter(config, null);
+
+  assert.equal(
+    adapter.listSchemasQuery(),
+    "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
+  );
+});
+
 class FakeSqlAdapter extends BaseSqlAdapter {
   public readonly events: string[] = [];
 
   public constructor(
     configValue: MysqlDatabaseConfig,
     timeoutMs: number | null = null,
-    private readonly statementDelayMs = 0
+    private readonly statementDelayMs = 0,
+    private readonly rawRows: Record<string, unknown>[] = []
   ) {
     super(configValue, timeoutMs);
   }
@@ -53,7 +70,7 @@ class FakeSqlAdapter extends BaseSqlAdapter {
   public async connect(): Promise<void> {}
   public async close(): Promise<void> {}
 
-  protected async executeRaw(): Promise<Record<string, unknown>[]> { return []; }
+  protected async executeRaw(): Promise<Record<string, unknown>[]> { return this.rawRows; }
   protected async executeStatementRaw(): Promise<{ affectedRows: number | null }> {
     if (this.statementDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.statementDelayMs));
@@ -83,4 +100,10 @@ class FakeSqlAdapter extends BaseSqlAdapter {
   protected describeTableSql(): { sql: string } { return { sql: "select 1" }; }
   protected listIndexesSql(): { sql: string } { return { sql: "select 1" }; }
   protected tableStatisticsSql(): { sql: string } { return { sql: "select 1" }; }
+}
+
+class TestableMysqlAdapter extends MysqlAdapter {
+  public listSchemasQuery(): string {
+    return this.listSchemasSql();
+  }
 }

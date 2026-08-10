@@ -122,7 +122,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     });
     const rows = await this.runWithTimeout("list_schemas", sql, [], () => this.executeRaw(sql));
     return rows.map((row) => ({
-      schema: String(row.schema ?? row.SCHEMA ?? row.SCHEMA_NAME ?? row.USERNAME)
+      schema: String(row.schema ?? row.SCHEMA ?? row.schema_name ?? row.SCHEMA_NAME ?? row.username ?? row.USERNAME)
     }));
   }
 

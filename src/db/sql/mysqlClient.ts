@@ -181,7 +181,7 @@ export class MysqlAdapter extends BaseSqlAdapter {
   }
 
   protected override listSchemasSql(): string {
-    return "SELECT schema_name AS schema FROM information_schema.schemata ORDER BY schema_name";
+    return "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name";
   }
 
   protected override listTablesSql(schema?: string): { sql: string; params?: unknown[] } {
