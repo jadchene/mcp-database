@@ -60,6 +60,34 @@ test("interactive confirmation falls back to two-step when elicitation throws", 
   assert.equal(pendingConfirmations.size, 1);
 });
 
+test("interactive confirmation reports an explicit user rejection", async () => {
+  const pendingConfirmations = new Map();
+
+  await assert.rejects(
+    () => confirmStatementExecutionWithFallback({
+      database: writableMysqlTarget,
+      input: {
+        databaseKey: "mysql-write",
+        sql: "delete from users where id = ?",
+        params: [1]
+      },
+      pendingConfirmations,
+      supportsInteractiveConfirmation: true,
+      elicitConfirmation: async (message) => {
+        assert.match(message, /Risk Level: NORMAL/);
+        assert.match(message, /SQL to execute:\ndelete from users where id = \?/);
+        assert.match(message, /Choose "yes".*"no"/);
+        return "no";
+      }
+    }),
+    (error: unknown) =>
+      error instanceof ApplicationError &&
+      error.code === "USER_DECLINED" &&
+      /user explicitly rejected.*not executed/i.test(error.message)
+  );
+  assert.equal(pendingConfirmations.size, 0);
+});
+
 test("two-step confirmation rejects changed SQL or params on second call", async () => {
   const pendingConfirmations = new Map();
 

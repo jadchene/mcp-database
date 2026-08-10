@@ -37,7 +37,7 @@ interface StatementConfirmationContext {
   input: StatementConfirmationInput;
   pendingConfirmations: Map<string, PendingStatementConfirmation>;
   supportsInteractiveConfirmation: boolean;
-  elicitConfirmation?: (message: string) => Promise<boolean>;
+  elicitConfirmation?: (message: string) => Promise<"yes" | "no">;
   now?: () => number;
   createId?: () => string;
   maxPendingConfirmations?: number;
@@ -267,13 +267,14 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 requestedSchema: {
                   type: "object",
                   properties: {
-                    confirm: {
-                      type: "boolean",
-                      title: "Confirm Execution",
-                      description: "Set to true to allow this SQL statement to run"
+                    decision: {
+                      type: "string",
+                      title: "Execute this SQL statement?",
+                      description: "Choose yes to execute the exact SQL shown above, or no to reject it.",
+                      enum: ["yes", "no"]
                     }
                   },
-                  required: ["confirm"]
+                  required: ["decision"]
                 }
               });
 
@@ -285,7 +286,9 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 confirmationMode: "interactive"
               });
 
-              return confirmation.action === "accept" && confirmation.content?.confirm === true;
+              return confirmation.action === "accept" && confirmation.content?.decision === "yes"
+                ? "yes"
+                : "no";
             }
           });
         }
@@ -432,20 +435,20 @@ function cleanupExpiredConfirmations(
 
 function buildInteractiveConfirmationMessage(input: StatementConfirmationInput): string {
   const statement = inspectSqlStatement(input.sql);
-  const previewSql = buildSqlPreview(input.sql);
-  const previewParams = buildParamsPreview(input.params);
   const targetObject = extractSqlTargetObject(statement.firstKeyword, input.sql);
   const riskSummary = buildRiskSummary(statement.riskLevel, statement.riskReasons);
+  const params = JSON.stringify(input.params ?? []);
 
   return (
-    `Manual confirmation required before executing write SQL.\n` +
+    `Review this database write operation before execution.\n\n` +
     `Database Key: ${input.databaseKey}\n` +
     `Statement: ${statement.firstKeyword}\n` +
     `Target: ${targetObject}\n` +
-    `Risk: ${statement.riskLevel.toUpperCase()}\n` +
+    `Risk Level: ${statement.riskLevel.toUpperCase()}\n` +
     `Risk Details: ${riskSummary}\n` +
-    `SQL Preview: ${previewSql}\n` +
-    `Params: ${previewParams}`
+    `Parameters: ${params}\n\n` +
+    `SQL to execute:\n${input.sql}\n\n` +
+    `Choose "yes" to execute this exact SQL or "no" to reject it.`
   );
 }
 
@@ -486,9 +489,12 @@ export async function confirmStatementExecutionWithFallback(
 
   if (supportsInteractiveConfirmation && elicitConfirmation) {
     try {
-      const confirmed = await elicitConfirmation(buildInteractiveConfirmationMessage(input));
-      if (!confirmed) {
-        throw new ApplicationError("NOT_SUPPORTED", "Write SQL execution was not confirmed");
+      const decision = await elicitConfirmation(buildInteractiveConfirmationMessage(input));
+      if (decision !== "yes") {
+        throw new ApplicationError(
+          "USER_DECLINED",
+          "The user explicitly rejected this SQL operation. The statement was not executed."
+        );
       }
 
       log("info", "Write statement confirmed through interactive confirmation", {
@@ -586,7 +592,7 @@ export async function confirmStatementExecutionWithFallback(
     confirmationId,
     confirmationMode: "two_step",
     message:
-      "This MCP client does not support interactive confirmation. Ask the user whether to execute the statement, then call execute_statement again with the same databaseKey, sql, params, confirmationId, and confirmExecution=true.",
+      "Interactive confirmation is unavailable. Show the user the exact SQL, parameters, and risk details below. If the user says yes, call execute_statement again with the same databaseKey, sql, params, confirmationId, and confirmExecution=true. If the user says no, do not call the tool again and report that the user rejected the operation.",
     statement: statement.firstKeyword,
     targetObject,
     riskLevel: statement.riskLevel,
