@@ -115,16 +115,7 @@ const executeStatementSchema = z.object({
   params: z
     .array(z.unknown())
     .optional()
-    .describe("Optional positional bind parameters matching placeholders in the SQL statement."),
-  confirmationId: z
-    .string()
-    .min(1)
-    .optional()
-    .describe("Second-step confirmation id previously returned by execute_statement when the client does not support interactive confirmation. Receiving a confirmationId is not final authorization. After the confirmationId is returned, ask the user again for explicit approval before making the second call."),
-  confirmExecution: z
-    .boolean()
-    .optional()
-    .describe("Set this to the JSON boolean value true on the second execute_statement call after the user explicitly confirms execution again. Do not pass the string \"true\". Do not send confirmExecution=true on the first call.")
+    .describe("Optional positional bind parameters matching placeholders in the SQL statement.")
 }).strict();
 const redisKeySchema = z.object({
   databaseKey: z
@@ -168,23 +159,7 @@ type ToolExecutionContext = {
     databaseKey: string;
     sql: string;
     params?: unknown[];
-    confirmationId?: string;
-    confirmExecution?: boolean;
-  }): Promise<
-    | { status: "confirmed"; databaseFingerprint: string }
-    | {
-      status: "pending";
-      confirmationId: string;
-      confirmationMode: "two_step";
-      message: string;
-      statement: string;
-      targetObject: string;
-      riskLevel: "normal" | "high" | "critical";
-      riskDetails: string;
-      sqlPreview: string;
-      paramsPreview: string;
-    }
-  >;
+  }): Promise<{ status: "confirmed"; databaseFingerprint: string }>;
 };
 
 export interface ToolDefinition {
@@ -1096,7 +1071,7 @@ export function buildToolRegistry(): ToolDefinition[] {
         whenNotToUse:
           "Do not use this for SELECT or other readonly SQL. Do not use it on targets configured as readonly. Avoid it unless a write is truly required.",
         inputExpectations:
-          "Requires databaseKey using the configured writable SQL target key from list_databases.key, plus one non-query SQL statement. Manual user confirmation is always required before execution. If the client supports interactive confirmation, the server requests it directly. Otherwise this becomes a strict two-step flow: the first call returns confirmation details and a confirmationId, and that confirmationId is not final authorization. After the confirmationId is returned, ask the user again for a second explicit approval, then make the second call with the same databaseKey, the same sql, the same params, the returned confirmationId, and confirmExecution set to the JSON boolean true. Never treat the user's original write request as that second confirmation, and never pass the string \"true\" for confirmExecution. High-risk statements such as UPDATE or DELETE without WHERE are specially highlighted. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
+          "Requires databaseKey using the configured writable SQL target key from list_databases.key, plus one non-query SQL statement. Interactive elicitation confirmation is always required before execution. If the client does not support elicitation or the elicitation request fails, the operation returns an error without executing. High-risk statements such as UPDATE or DELETE without WHERE are specially highlighted. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
         databaseSupport: "Writable SQL targets only: MySQL, Oracle, PostgreSQL, and openGauss when readonly is false."
       }),
       executeStatementSchema,
@@ -1104,14 +1079,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       const confirmation = await context.confirmStatementExecution({
         databaseKey: args.databaseKey,
         sql: args.sql,
-        params: args.params,
-        confirmationId: args.confirmationId,
-        confirmExecution: args.confirmExecution
+        params: args.params
       });
-
-      if (confirmation.status === "pending") {
-        return confirmation;
-      }
 
       const confirmedDatabase = context.getConfig().databaseMap.get(args.databaseKey);
       if (

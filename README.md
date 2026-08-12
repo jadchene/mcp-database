@@ -178,14 +178,16 @@ Redis:
 - Config reload is atomic. If a new config file is invalid, the previous validated in-memory config remains active.
 - Connections are opened lazily for each request and cleaned up after the request finishes.
 
-### Write Confirmation and Two-Step Fallback
+### Write Confirmation
+
+> [!IMPORTANT]
+> Starting with **v0.2.2**, the non-elicitation two-step confirmation fallback has been removed. `execute_statement` now returns an error without executing when the MCP client does not support elicitation or when the elicitation request fails. Use an MCP client with elicitation support for database writes.
 
 - Manual user confirmation is always required before `execute_statement` executes.
 - When the MCP client supports elicitation, the server shows the exact SQL, parameters, target, and risk level, then asks the user to choose `yes` or `no`.
 - A `no`, cancel, or decline response is returned as an explicit user rejection and the SQL is not executed.
-- When elicitation is not available, the server uses the same explicit two-step confirmation model as other high-risk MCP tools: the first call returns confirmation details and a `confirmationId`; the second call must repeat the same `databaseKey`, `sql`, and `params`, then pass that `confirmationId` with `confirmExecution: true`.
-- The server verifies that the second call matches the original pending request before execution.
-- Interactive confirmation includes the full SQL and parameters. The two-step fallback includes SQL type, target object, previews, risk level, and risk hints for dangerous statements such as `UPDATE` or `DELETE` without `WHERE`.
+- When elicitation is unavailable or fails, the server returns an explicit error and does not execute the SQL.
+- Interactive confirmation includes the full SQL, parameters, target, risk level, and risk hints for dangerous statements such as `UPDATE` or `DELETE` without `WHERE`.
 
 ## Config Reload
 

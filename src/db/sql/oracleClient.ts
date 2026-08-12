@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { OracleDatabaseConfig } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
 import { BaseSqlAdapter } from "./baseSqlAdapter.js";
@@ -122,11 +123,24 @@ export class OracleAdapter extends BaseSqlAdapter {
     params: unknown[] | undefined,
     maxRows: number
   ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
-    await this.executeStatementRaw(`EXPLAIN PLAN FOR ${sql}`, params);
-    return this.executeLimitedQueryRaw(`
-      SELECT plan_table_output AS planLine
-      FROM TABLE(DBMS_XPLAN.DISPLAY())
-    `, undefined, maxRows);
+    if (!this.connection) {
+      throw new ApplicationError("CONNECTION_ERROR", "Oracle connection is not open");
+    }
+    const statementId = `mcp_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await this.connection.execute(
+        `EXPLAIN PLAN SET STATEMENT_ID = '${statementId}' FOR ${sql}`,
+        params ?? []
+      );
+      return await this.executeLimitedQueryRaw(`
+        SELECT plan_table_output AS planLine
+        FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :statementId, 'TYPICAL'))
+      `, [statementId], maxRows);
+    } finally {
+      // EXPLAIN PLAN writes PLAN_TABLE. Roll back the isolated adapter
+      // transaction so explain_query does not leave rows or commit side effects.
+      await this.connection.rollback().catch(() => undefined);
+    }
   }
 
   protected override async analyzeQueryRows(

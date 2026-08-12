@@ -1,6 +1,6 @@
 ---
 name: database-mcp
-description: Use the database MCP service for routine database work across MySQL, Oracle, PostgreSQL, Redis, and openGauss. Trigger this skill when the task involves querying data, inspecting schemas, locating database names from project config, preparing SQL, checking indexes, reading Redis keys, or handling database writes through interactive yes/no confirmation or the two-step fallback.
+description: Use the database MCP service for routine database work across MySQL, Oracle, PostgreSQL, Redis, and openGauss. Trigger this skill when the task involves querying data, inspecting schemas, locating database names from project config, preparing SQL, checking indexes, reading Redis keys, or handling database writes through interactive yes/no confirmation.
 ---
 
 # Database MCP
@@ -33,10 +33,7 @@ Use the database MCP service proactively for database-related work.
 - Treat database writes as blocked until the user explicitly requests them.
 - Any `UPDATE`, `DELETE`, `DROP`, `TRUNCATE`, `INSERT INTO ... SELECT`, or other write must receive explicit user approval through the server's confirmation prompt before execution.
 - Let the user review the exact SQL, parameters, and risk level and choose yes or no. Stop after no, cancel, or decline and report that the user rejected the operation.
-- If a write tool returns a `confirmationId`, treat that as an intermediate step only.
-- After receiving `confirmationId`, ask the user again for a second explicit confirmation before calling the final execution step.
-- Never treat the user's original write request as approval of the interactive prompt or fallback second step.
-- Never call the final execution step with `confirmExecution=true` until that second confirmation is received.
+- If elicitation is unavailable or fails, report the error and do not attempt a fallback write.
 
 ## Database name discovery
 

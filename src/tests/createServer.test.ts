@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { fingerprintDatabaseTarget } from "../config/databaseFingerprint.js";
 import { ApplicationError } from "../core/errors.js";
-import { confirmStatementExecutionWithFallback } from "../server/createServer.js";
+import { confirmStatementExecution } from "../server/createServer.js";
 
 const writableMysqlTarget = {
   key: "mysql-write",
@@ -17,66 +17,58 @@ const writableMysqlTarget = {
   }
 };
 
-test("two-step confirmation returns pending when interactive confirmation is unavailable", async () => {
-  const pendingConfirmations = new Map();
-
-  const result = await confirmStatementExecutionWithFallback({
-    database: writableMysqlTarget,
-    input: {
-      databaseKey: "mysql-write",
-      sql: "update users set enabled = ? where id = ?",
-      params: [0, 1]
-    },
-    pendingConfirmations,
-    supportsInteractiveConfirmation: false,
-    createId: () => "confirm-1"
-  });
-
-  assert.equal(result.status, "pending");
-  assert.equal(result.confirmationId, "confirm-1");
-  assert.equal(pendingConfirmations.size, 1);
-});
-
-test("interactive confirmation falls back to two-step when elicitation throws", async () => {
-  const pendingConfirmations = new Map();
-
-  const result = await confirmStatementExecutionWithFallback({
-    database: writableMysqlTarget,
-    input: {
-      databaseKey: "mysql-write",
-      sql: "delete from users where id = ?",
-      params: [1]
-    },
-    pendingConfirmations,
-    supportsInteractiveConfirmation: true,
-    elicitConfirmation: async () => {
-      throw new Error("Host claimed elicitation support but failed");
-    },
-    createId: () => "confirm-2"
-  });
-
-  assert.equal(result.status, "pending");
-  assert.equal(result.confirmationId, "confirm-2");
-  assert.equal(pendingConfirmations.size, 1);
-});
-
-test("interactive confirmation reports an explicit user rejection", async () => {
-  const pendingConfirmations = new Map();
-
+test("write confirmation fails closed when elicitation is unavailable", async () => {
   await assert.rejects(
-    () => confirmStatementExecutionWithFallback({
+    () => confirmStatementExecution({
+      database: writableMysqlTarget,
+      input: {
+        databaseKey: "mysql-write",
+        sql: "update users set enabled = ? where id = ?",
+        params: [0, 1]
+      },
+      supportsInteractiveConfirmation: false
+    }),
+    (error: unknown) =>
+      error instanceof ApplicationError &&
+      error.code === "NOT_SUPPORTED" &&
+      /requires interactive elicitation.*not executed/i.test(error.message)
+  );
+});
+
+test("write confirmation fails closed when elicitation throws", async () => {
+  await assert.rejects(
+    () => confirmStatementExecution({
       database: writableMysqlTarget,
       input: {
         databaseKey: "mysql-write",
         sql: "delete from users where id = ?",
         params: [1]
       },
-      pendingConfirmations,
+      supportsInteractiveConfirmation: true,
+      elicitConfirmation: async () => {
+        throw new Error("Host claimed elicitation support but failed");
+      }
+    }),
+    (error: unknown) =>
+      error instanceof ApplicationError &&
+      error.code === "NOT_SUPPORTED" &&
+      /elicitation failed.*not executed/i.test(error.message)
+  );
+});
+
+test("interactive confirmation reports an explicit user rejection", async () => {
+  await assert.rejects(
+    () => confirmStatementExecution({
+      database: writableMysqlTarget,
+      input: {
+        databaseKey: "mysql-write",
+        sql: "delete from users where id = ?",
+        params: [1]
+      },
       supportsInteractiveConfirmation: true,
       elicitConfirmation: async (message) => {
         assert.match(message, /Risk Level: NORMAL/);
         assert.match(message, /SQL to execute:\ndelete from users where id = \?/);
-        assert.match(message, /Choose "yes".*"no"/);
         return "no";
       }
     }),
@@ -85,120 +77,22 @@ test("interactive confirmation reports an explicit user rejection", async () => 
       error.code === "USER_DECLINED" &&
       /user explicitly rejected.*not executed/i.test(error.message)
   );
-  assert.equal(pendingConfirmations.size, 0);
 });
 
-test("two-step confirmation rejects changed SQL or params on second call", async () => {
-  const pendingConfirmations = new Map();
-
-  const firstResult = await confirmStatementExecutionWithFallback({
+test("interactive confirmation returns the current target fingerprint after yes", async () => {
+  const result = await confirmStatementExecution({
     database: writableMysqlTarget,
     input: {
       databaseKey: "mysql-write",
       sql: "update users set enabled = ? where id = ?",
       params: [0, 1]
     },
-    pendingConfirmations,
-    supportsInteractiveConfirmation: false,
-    createId: () => "confirm-3"
+    supportsInteractiveConfirmation: true,
+    elicitConfirmation: async () => "yes"
   });
 
-  assert.equal(firstResult.status, "pending");
-
-  await assert.rejects(
-    () =>
-      confirmStatementExecutionWithFallback({
-        database: writableMysqlTarget,
-        input: {
-          databaseKey: "mysql-write",
-          sql: "update users set enabled = ? where id = ?",
-          params: [0, 2],
-          confirmationId: "confirm-3",
-          confirmExecution: true
-        },
-        pendingConfirmations,
-        supportsInteractiveConfirmation: false
-      }),
-    (error: unknown) =>
-      error instanceof ApplicationError &&
-      error.code === "INVALID_ARGUMENT" &&
-      /does not match the pending SQL request/i.test(error.message)
-  );
-});
-
-test("two-step confirmation rejects a changed database target", async () => {
-  const pendingConfirmations = new Map();
-
-  await confirmStatementExecutionWithFallback({
-    database: writableMysqlTarget,
-    input: {
-      databaseKey: "mysql-write",
-      sql: "delete from users where id = ?",
-      params: [1]
-    },
-    pendingConfirmations,
-    supportsInteractiveConfirmation: false,
-    createId: () => "confirm-target"
+  assert.deepEqual(result, {
+    status: "confirmed",
+    databaseFingerprint: fingerprintDatabaseTarget(writableMysqlTarget)
   });
-
-  await assert.rejects(
-    () => confirmStatementExecutionWithFallback({
-      database: {
-        ...writableMysqlTarget,
-        connection: {
-          ...writableMysqlTarget.connection,
-          host: "production.example.internal",
-          databaseName: "production"
-        }
-      },
-      input: {
-        databaseKey: "mysql-write",
-        sql: "delete from users where id = ?",
-        params: [1],
-        confirmationId: "confirm-target",
-        confirmExecution: true
-      },
-      pendingConfirmations,
-      supportsInteractiveConfirmation: false
-    }),
-    (error: unknown) =>
-      error instanceof ApplicationError &&
-      error.code === "INVALID_ARGUMENT" &&
-      /configuration changed after confirmation/i.test(error.message)
-  );
-  assert.equal(pendingConfirmations.size, 0);
-});
-
-test("two-step confirmation enforces a maximum number of pending requests", async () => {
-  const pendingConfirmations = new Map([
-    [
-      "confirm-existing",
-      {
-        databaseKey: "mysql-write",
-        databaseFingerprint: fingerprintDatabaseTarget(writableMysqlTarget),
-        sql: "update users set enabled = 1 where id = 1",
-        params: [],
-        expiresAt: Date.now() + 60_000
-      }
-    ]
-  ]);
-
-  await assert.rejects(
-    () =>
-      confirmStatementExecutionWithFallback({
-        database: writableMysqlTarget,
-        input: {
-          databaseKey: "mysql-write",
-          sql: "update users set enabled = ? where id = ?",
-          params: [0, 1]
-        },
-        pendingConfirmations,
-        supportsInteractiveConfirmation: false,
-        maxPendingConfirmations: 1
-      }),
-    (error: unknown) =>
-      error instanceof ApplicationError &&
-      error.code === "TIMEOUT" &&
-      /Too many pending write confirmations/i.test(error.message)
-  );
 });

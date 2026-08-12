@@ -9,8 +9,9 @@ function propertiesFor(toolName: string): Record<string, Record<string, unknown>
   return tool.inputSchema.properties as Record<string, Record<string, unknown>>;
 }
 
-test("execute_statement exposes confirmExecution as a boolean", () => {
-  assert.equal(propertiesFor("execute_statement").confirmExecution?.type, "boolean");
+test("execute_statement does not expose removed fallback confirmation fields", () => {
+  assert.equal(propertiesFor("execute_statement").confirmExecution, undefined);
+  assert.equal(propertiesFor("execute_statement").confirmationId, undefined);
 });
 
 test("query and scan schemas expose integer bounds", () => {

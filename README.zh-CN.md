@@ -178,13 +178,15 @@ Redis：
 - 配置刷新是原子的。新配置无效时，继续使用上一份已校验的内存配置。
 - 连接按请求懒加载，并在请求结束后清理。
 
-### 写入确认与两步 fallback
+### 写入确认
+
+> [!IMPORTANT]
+> 从 **v0.2.2** 开始，已移除客户端不支持 elicitation 时的两步确认 fallback。MCP 客户端不支持 elicitation 或 elicitation 请求失败时，`execute_statement` 会直接返回错误且不会执行 SQL。数据库写入请使用支持 elicitation 的 MCP 客户端。
 
 - `execute_statement` 执行前始终需要用户手动确认。
 - 当 MCP 客户端支持 elicitation 时，服务会通过客户端直接请求确认。
-- 当客户端不支持 elicitation 时，服务使用和其他高风险 MCP 工具一致的显式两步确认模型：第一次调用返回确认详情和 `confirmationId`；第二次调用必须重复相同的 `databaseKey`、`sql` 和 `params`，并携带该 `confirmationId` 与 `confirmExecution: true`。
-- 服务会校验第二次调用是否与原始待确认请求完全匹配，然后才执行。
-- 确认信息包含 SQL 类型、目标对象、SQL 预览、参数预览、风险等级，以及 `UPDATE` 或 `DELETE` 不带 `WHERE` 等危险语句的风险提示。
+- 客户端不支持 elicitation 或 elicitation 请求失败时，服务会直接返回错误且不会执行 SQL。
+- 交互式确认包含 SQL、参数、目标对象、风险等级，以及 `UPDATE` 或 `DELETE` 不带 `WHERE` 等危险语句的风险提示。
 
 ## 配置刷新
 

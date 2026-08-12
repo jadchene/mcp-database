@@ -1,6 +1,6 @@
 {
   "name": "@jadchene/mcp-database-service",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A multi-database MCP server with lazy short-lived connections, strong read-only defaults, and explicit confirmation for writable SQL.",
   "type": "module",
   "main": "dist/index.js",
