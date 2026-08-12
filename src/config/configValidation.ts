@@ -5,6 +5,8 @@ import type { DatabaseConfig, RootConfig } from "./configTypes.js";
 
 const readonlySchema = z.boolean();
 const keySchema = z.string().min(1);
+const portSchema = z.number().int().min(1).max(65_535).optional();
+const timeoutSchema = z.number().int().min(1).max(2_147_483_647).optional();
 
 const mysqlSchema = z.object({
   key: keySchema,
@@ -12,14 +14,14 @@ const mysqlSchema = z.object({
   readonly: readonlySchema,
   connection: z.object({
     host: z.string().min(1),
-    port: z.number().int().positive().optional(),
+    port: portSchema,
     databaseName: z.string().min(1),
     user: z.string().min(1),
     password: z.string(),
-    connectTimeoutMs: z.number().int().positive().optional(),
+    connectTimeoutMs: timeoutSchema,
     ssl: z.union([z.boolean(), z.record(z.unknown())]).optional()
-  })
-});
+  }).strict()
+}).strict();
 
 const oracleSchema = z.object({
   key: keySchema,
@@ -28,15 +30,15 @@ const oracleSchema = z.object({
   connection: z
     .object({
       host: z.string().min(1),
-      port: z.number().int().positive().optional(),
+      port: portSchema,
       serviceName: z.string().min(1).optional(),
       sid: z.string().min(1).optional(),
       user: z.string().min(1),
       password: z.string(),
-      connectTimeoutMs: z.number().int().positive().optional(),
+      connectTimeoutMs: timeoutSchema,
       clientMode: z.union([z.literal("thin"), z.literal("thick")]).optional(),
       clientLibDir: z.string().min(1).optional()
-    })
+    }).strict()
     .superRefine((value, context) => {
       if (!value.serviceName && !value.sid) {
         context.addIssue({
@@ -52,31 +54,31 @@ const oracleSchema = z.object({
         });
       }
     })
-});
+}).strict();
 
 const postgresConnectionSchema = z.object({
   host: z.string().min(1),
-  port: z.number().int().positive().optional(),
+  port: portSchema,
   databaseName: z.string().min(1),
   user: z.string().min(1),
   password: z.string(),
-  connectTimeoutMs: z.number().int().positive().optional(),
+  connectTimeoutMs: timeoutSchema,
   ssl: z.union([z.boolean(), z.record(z.unknown())]).optional()
-});
+}).strict();
 
 const postgresSchema = z.object({
   key: keySchema,
   type: z.literal("postgresql"),
   readonly: readonlySchema,
   connection: postgresConnectionSchema
-});
+}).strict();
 
 const openGaussSchema = z.object({
   key: keySchema,
   type: z.literal("opengauss"),
   readonly: readonlySchema,
   connection: postgresConnectionSchema
-});
+}).strict();
 
 const redisSchema = z.object({
   key: keySchema,
@@ -86,12 +88,12 @@ const redisSchema = z.object({
     .object({
       url: z.string().min(1).optional(),
       host: z.string().min(1).optional(),
-      port: z.number().int().positive().optional(),
+      port: portSchema,
       databaseName: z.number().int().nonnegative().optional(),
       username: z.string().optional(),
       password: z.string().optional(),
-      connectTimeoutMs: z.number().int().positive().optional()
-    })
+      connectTimeoutMs: timeoutSchema
+    }).strict()
     .superRefine((value, context) => {
       if (!value.url && !value.host) {
         context.addIssue({
@@ -100,7 +102,7 @@ const redisSchema = z.object({
         });
       }
     })
-});
+}).strict();
 
 const databaseArraySchema = z
   .array(z.discriminatedUnion("type", [mysqlSchema, oracleSchema, postgresSchema, openGaussSchema, redisSchema]))
@@ -112,14 +114,14 @@ const rootConfigSchema = z.object({
     .object({
       enabled: z.boolean().default(false),
       directory: z.string().min(1).optional()
-    })
+    }).strict()
     .default({
       enabled: false
     }),
   query: z
     .object({
-      timeoutMs: z.number().int().positive().optional()
-    })
+      timeoutMs: timeoutSchema
+    }).strict()
     .default({})
 }).strict();
 

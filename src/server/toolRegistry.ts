@@ -14,6 +14,14 @@ const databaseKeySchema = z.object({
     .min(1)
     .describe("Exact configured target key from list_databases. This is the MCP identifier used to call tools. It is not necessarily the same as connection.databaseName or the physical database name used inside SQL.")
 }).strict();
+const metadataMaxRowsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(1000)
+  .optional()
+  .describe("Optional maximum number of metadata rows returned. Default is 200 and the hard limit is 1000.");
+const listSchemasSchema = databaseKeySchema.extend({ maxRows: metadataMaxRowsSchema });
 const listTablesSchema = z.object({
   databaseKey: z
     .string()
@@ -23,7 +31,8 @@ const listTablesSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Optional schema name. Omit it to use the database's current or default schema.")
+    .describe("Optional schema name. Omit it to use the database's current or default schema."),
+  maxRows: metadataMaxRowsSchema
 }).strict();
 const describeTableSchema = z.object({
   databaseKey: z
@@ -40,7 +49,8 @@ const describeTableSchema = z.object({
     .min(1)
     .describe("Table or view name to inspect. Pass only the object name, not a full SQL statement.")
 }).strict();
-const listIndexesSchema = describeTableSchema;
+const limitedDescribeTableSchema = describeTableSchema.extend({ maxRows: metadataMaxRowsSchema });
+const listIndexesSchema = limitedDescribeTableSchema;
 const getTableStatisticsSchema = describeTableSchema;
 const schemaPatternSchema = z.object({
   databaseKey: z
@@ -719,15 +729,15 @@ export function buildToolRegistry(): ToolDefinition[] {
         whenNotToUse:
           "Do not use this for Redis or when you already know the exact schema name.",
         inputExpectations:
-          "Requires databaseKey only, using the configured target key from list_databases.key. Returns schema names visible to the configured user.",
+          "Requires databaseKey using the configured target key from list_databases.key. Optional maxRows defaults to 200 and is capped at 1000. Returns schema names visible to the configured user and truncated when more rows exist.",
         databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
       }),
-      databaseKeySchema,
+      listSchemasSchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
         databaseKey: args.databaseKey,
         type: adapter.config.type,
-        items: await adapter.listSchemas()
+        ...(await adapter.listSchemas(args.maxRows ?? 200))
       }))
     ),
     makeTool(
@@ -738,7 +748,7 @@ export function buildToolRegistry(): ToolDefinition[] {
         whenNotToUse:
           "Do not use this for Redis or when you already know the exact table name and only need column or index metadata.",
         inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key. Optional schema. If schema is omitted, the database's current or default schema is used.",
+          "Requires databaseKey using the configured target key from list_databases.key. Optional schema and maxRows; maxRows defaults to 200 and is capped at 1000. If schema is omitted, the database's current or default schema is used.",
         databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
       }),
       listTablesSchema,
@@ -746,7 +756,7 @@ export function buildToolRegistry(): ToolDefinition[] {
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
         databaseKey: args.databaseKey,
         type: adapter.config.type,
-        items: await adapter.listTables(args.schema)
+        ...(await adapter.listTables(args.schema, args.maxRows ?? 200))
       }))
     ),
     makeTool(
@@ -757,15 +767,15 @@ export function buildToolRegistry(): ToolDefinition[] {
         whenNotToUse:
           "Do not use this for Redis or when you only need a high-level table list.",
         inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus table. Optional schema. Returns one item per column.",
+          "Requires databaseKey using the configured target key from list_databases.key, plus table. Optional schema and maxRows; maxRows defaults to 200 and is capped at 1000. Returns one item per column and truncated when more rows exist.",
         databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
       }),
-      describeTableSchema,
+      limitedDescribeTableSchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
         databaseKey: args.databaseKey,
         type: adapter.config.type,
-        items: await adapter.describeTable(args.schema, args.table)
+        ...(await adapter.describeTable(args.schema, args.table, args.maxRows ?? 200))
       }))
     ),
     makeTool(
@@ -776,7 +786,7 @@ export function buildToolRegistry(): ToolDefinition[] {
         whenNotToUse:
           "Do not use this for Redis or as a substitute for runtime plan analysis. Use explain_query or analyze_query for plan details.",
         inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus table. Optional schema. Some databases may return full index definitions instead of per-column detail rows.",
+          "Requires databaseKey using the configured target key from list_databases.key, plus table. Optional schema and maxRows; maxRows defaults to 200 and is capped at 1000. Some databases may return full index definitions instead of per-column detail rows.",
         databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
       }),
       listIndexesSchema,
@@ -784,7 +794,7 @@ export function buildToolRegistry(): ToolDefinition[] {
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
         databaseKey: args.databaseKey,
         type: adapter.config.type,
-        items: await adapter.listIndexes(args.schema, args.table)
+        ...(await adapter.listIndexes(args.schema, args.table, args.maxRows ?? 200))
       }))
     ),
     makeTool(

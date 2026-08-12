@@ -87,3 +87,38 @@ test("config validation defaults logging to disabled when omitted", () => {
   assert.equal(result.logging.enabled, false);
   assert.equal(result.query.timeoutMs, undefined);
 });
+
+test("config validation rejects ports and timers outside runtime limits", () => {
+  assert.throws(() => validateDatabaseConfig({
+    query: { timeoutMs: 2_147_483_648 },
+    databases: [{
+      key: "invalid",
+      type: "mysql",
+      readonly: true,
+      connection: {
+        host: "127.0.0.1",
+        port: 65_536,
+        databaseName: "app_db",
+        user: "root",
+        password: "secret"
+      }
+    }]
+  }), (error: unknown) => error instanceof ApplicationError && error.code === "CONFIG_ERROR");
+});
+
+test("config validation rejects unknown nested fields", () => {
+  assert.throws(() => validateDatabaseConfig({
+    databases: [{
+      key: "invalid",
+      type: "mysql",
+      readonly: true,
+      connection: {
+        host: "127.0.0.1",
+        databaseName: "app_db",
+        user: "root",
+        password: "secret",
+        typoedOption: true
+      }
+    }]
+  }), (error: unknown) => error instanceof ApplicationError && error.code === "CONFIG_ERROR");
+});

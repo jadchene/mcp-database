@@ -43,7 +43,24 @@ test("write timeout cancels the operation and reports an unknown outcome", async
 test("listSchemas maps the lowercase schema_name returned by MySQL", async () => {
   const adapter = new FakeSqlAdapter(config, null, 0, [{ schema_name: "application" }]);
 
-  assert.deepEqual(await adapter.listSchemas(), [{ schema: "application" }]);
+  assert.deepEqual(await adapter.listSchemas(200), {
+    items: [{ schema: "application" }],
+    truncated: false
+  });
+});
+
+test("metadata queries are bounded in SQL and report truncation", async () => {
+  const adapter = new FakeSqlAdapter(config, null, 0, [
+    { schema_name: "first" },
+    { schema_name: "second" },
+    { schema_name: "third" }
+  ]);
+
+  assert.deepEqual(await adapter.listSchemas(2), {
+    items: [{ schema: "first" }, { schema: "second" }],
+    truncated: true
+  });
+  assert.match(adapter.lastRawSql, /LIMIT 3$/);
 });
 
 test("MySQL listSchemas query avoids the reserved schema alias", () => {
@@ -57,6 +74,7 @@ test("MySQL listSchemas query avoids the reserved schema alias", () => {
 
 class FakeSqlAdapter extends BaseSqlAdapter {
   public readonly events: string[] = [];
+  public lastRawSql = "";
 
   public constructor(
     configValue: MysqlDatabaseConfig,
@@ -70,7 +88,10 @@ class FakeSqlAdapter extends BaseSqlAdapter {
   public async connect(): Promise<void> {}
   public async close(): Promise<void> {}
 
-  protected async executeRaw(): Promise<Record<string, unknown>[]> { return this.rawRows; }
+  protected async executeRaw(sql: string): Promise<Record<string, unknown>[]> {
+    this.lastRawSql = sql;
+    return this.rawRows;
+  }
   protected async executeStatementRaw(): Promise<{ affectedRows: number | null }> {
     if (this.statementDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.statementDelayMs));

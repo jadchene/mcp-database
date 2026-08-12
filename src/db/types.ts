@@ -2,6 +2,7 @@ import type { DatabaseConfig } from "../config/configTypes.js";
 import type {
   ColumnInfo,
   IndexInfo,
+  LimitedMetadataResult,
   PingResult,
   QueryResult,
   RedisScanResult,
@@ -19,10 +20,10 @@ export interface DatabaseAdapter {
 }
 
 export interface SqlDatabaseAdapter extends DatabaseAdapter {
-  listSchemas(): Promise<SchemaInfo[]>;
-  listTables(schema?: string): Promise<TableInfo[]>;
-  describeTable(schema: string | undefined, table: string): Promise<ColumnInfo[]>;
-  listIndexes(schema: string | undefined, table: string): Promise<IndexInfo[]>;
+  listSchemas(maxRows: number): Promise<LimitedMetadataResult<SchemaInfo>>;
+  listTables(schema: string | undefined, maxRows: number): Promise<LimitedMetadataResult<TableInfo>>;
+  describeTable(schema: string | undefined, table: string, maxRows: number): Promise<LimitedMetadataResult<ColumnInfo>>;
+  listIndexes(schema: string | undefined, table: string, maxRows: number): Promise<LimitedMetadataResult<IndexInfo>>;
   getTableStatistics(schema: string | undefined, table: string): Promise<TableStatistics | null>;
   explainQuery(sql: string, params: unknown[] | undefined, maxRows: number): Promise<QueryResult>;
   analyzeQuery(sql: string, params: unknown[] | undefined, maxRows: number): Promise<QueryResult>;

@@ -27,3 +27,14 @@ test("query and scan schemas expose integer bounds", () => {
     { type: "integer", minimum: 1, maximum: 1000 }
   );
 });
+
+test("metadata schemas expose bounded row limits", () => {
+  for (const toolName of ["list_schemas", "list_tables", "describe_table", "list_indexes"]) {
+    const maxRows = propertiesFor(toolName).maxRows;
+    assert.deepEqual(
+      { type: maxRows?.type, minimum: maxRows?.minimum, maximum: maxRows?.maximum },
+      { type: "integer", minimum: 1, maximum: 1000 },
+      toolName
+    );
+  }
+});

@@ -28,6 +28,11 @@ export interface QueryResult {
   truncated: boolean;
 }
 
+export interface LimitedMetadataResult<T> {
+  items: T[];
+  truncated: boolean;
+}
+
 export interface IndexInfo {
   schema: string;
   tableName: string;
