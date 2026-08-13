@@ -7,35 +7,15 @@ description: Use the database MCP service for routine database work across MySQL
 
 Use the database MCP service proactively for database-related work.
 
-## Scope
-
-- Use this skill for routine database tasks such as querying data, inspecting schemas, locating database names from project config, preparing SQL, reading Redis keys, and handling write-safety confirmation flow.
-
-## Required workflow
+## Workflow
 
 1. Start with `list_databases` to discover available targets.
-2. Inspect table structure before writing business queries when the schema is not already clear.
-3. Use `databaseKey` for MCP tool calls.
-4. Use `list_databases.databaseName` only when SQL needs an explicit database name.
-5. Default to query-only access unless the user explicitly asks for a write.
+2. Use `databaseKey` for tool calls. Use the returned `databaseName` only when SQL needs an explicit database name; inspect project configuration when that name is still unclear.
+3. Limit query results to 10 rows by default and avoid unnecessary large text or binary fields.
+4. Use the dedicated Redis tools. For Oracle plans, use `explain_query` instead of `analyze_query`.
+5. Default to reads unless the user explicitly requests a write.
 
-## Query and inspection rules
+## Write Safety
 
-- Limit query results to 10 rows by default unless the task clearly requires a different size.
-- Avoid `SELECT *` by default. Prefer selecting only the columns needed for the task.
-- Avoid selecting very long text/blob-like fields unless they are necessary for the task, so token usage does not explode.
-- Use `describe_table`, `list_indexes`, `get_table_statistics`, `explain_query`, and `analyze_query` when the task needs schema or performance analysis.
-- Use `explain_query` instead of `analyze_query` for Oracle.
-- For Redis, use the Redis MCP tools instead of SQL tools.
-
-## Write safety rules
-
-- Treat database writes as blocked until the user explicitly requests them.
-- Any `UPDATE`, `DELETE`, `DROP`, `TRUNCATE`, `INSERT INTO ... SELECT`, or other write must receive explicit user approval through the server's confirmation prompt before execution.
-- Let the user review the exact SQL, parameters, and risk level and choose yes or no. Stop after no, cancel, or decline and report that the user rejected the operation.
-- If elicitation is unavailable or fails, report the error and do not attempt a fallback write.
-
-## Database name discovery
-
-- Check Spring configuration files to locate the actual database name when needed.
-- Ask the user directly if the database information is still unclear after checking the project config.
+- Let the user review the exact SQL, parameters, and risk level through the server's elicitation prompt.
+- Stop after rejection, cancellation, or elicitation failure; never attempt a fallback write.
