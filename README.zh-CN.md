@@ -6,6 +6,9 @@ MCP Database Service 是一个 TypeScript 编写的 MCP 服务，让 AI Agent �
 
 它支持 MySQL、PostgreSQL、openGauss、Oracle 和 Redis。SQL 目标默认只读，每次请求按需建立短连接，写入 SQL 必须经过明确确认。
 
+> [!IMPORTANT]
+> 从 **v0.3.0** 开始，已移除客户端不支持 elicitation 时的两步确认 fallback。MCP 客户端不支持 elicitation 或 elicitation 请求失败时，`execute_statement` 会直接返回错误且不会执行 SQL。数据库写入请使用支持 elicitation 的 MCP 客户端。
+
 ## 功能
 
 - 在一个 JSON 配置文件中管理多个命名数据库目标。
@@ -179,9 +182,6 @@ Redis：
 - 连接按请求懒加载，并在请求结束后清理。
 
 ### 写入确认
-
-> [!IMPORTANT]
-> 从 **v0.2.2** 开始，已移除客户端不支持 elicitation 时的两步确认 fallback。MCP 客户端不支持 elicitation 或 elicitation 请求失败时，`execute_statement` 会直接返回错误且不会执行 SQL。数据库写入请使用支持 elicitation 的 MCP 客户端。
 
 - `execute_statement` 执行前始终需要用户手动确认。
 - 当 MCP 客户端支持 elicitation 时，服务会通过客户端直接请求确认。

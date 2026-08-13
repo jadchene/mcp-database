@@ -6,6 +6,9 @@ MCP Database Service is a TypeScript MCP server that lets AI agents inspect and 
 
 It supports MySQL, PostgreSQL, openGauss, Oracle, and Redis. SQL targets are read-only by default, connections are opened lazily for each request, and writable SQL requires explicit confirmation.
 
+> [!IMPORTANT]
+> Starting with **v0.3.0**, the non-elicitation two-step confirmation fallback has been removed. `execute_statement` now returns an error without executing when the MCP client does not support elicitation or when the elicitation request fails. Use an MCP client with elicitation support for database writes.
+
 ## Features
 
 - Multiple named database targets in one JSON config file.
@@ -179,9 +182,6 @@ Redis:
 - Connections are opened lazily for each request and cleaned up after the request finishes.
 
 ### Write Confirmation
-
-> [!IMPORTANT]
-> Starting with **v0.2.2**, the non-elicitation two-step confirmation fallback has been removed. `execute_statement` now returns an error without executing when the MCP client does not support elicitation or when the elicitation request fails. Use an MCP client with elicitation support for database writes.
 
 - Manual user confirmation is always required before `execute_statement` executes.
 - When the MCP client supports elicitation, the server shows the exact SQL, parameters, target, and risk level, then asks the user to choose `yes` or `no`.
