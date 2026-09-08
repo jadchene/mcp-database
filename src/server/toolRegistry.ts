@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { readFile } from "node:fs/promises";
+import { resolve, extname } from "node:path";
 
 import { fingerprintDatabaseTarget } from "../config/databaseFingerprint.js";
 import { summarizeDatabaseListItem, summarizeLoadedConfig } from "../config/configSummary.js";
 import type { LoadedConfig } from "../config/configTypes.js";
 import { ApplicationError } from "../core/errors.js";
 import type { RedisDatabaseAdapter, SqlDatabaseAdapter } from "../db/types.js";
+import { scanScriptRisk } from "../db/scriptGuard.js";
 
 const emptySchema = z.object({}).describe("This tool does not require any input arguments.").strict();
 const databaseKeySchema = z.object({
@@ -127,6 +130,49 @@ const executeStatementSchema = z.object({
     .optional()
     .describe("Optional positional bind parameters matching placeholders in the SQL statement.")
 }).strict();
+const executeScriptSchema = z
+  .object({
+    databaseKey: z
+      .string()
+      .min(1)
+      .describe(
+        "Exact configured writable SQL target key from list_databases. Supported engines are reported by the database adapter; use the key that supports script execution."
+      ),
+    sql: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "The full SQL script string to execute on a single MySQL connection. Either this or sqlFile must be provided, not both. Session variables such as @var are preserved because the whole script runs on one connection. This tool passes the entire string to the MySQL driver with multipleStatements enabled; it does not split statements client-side."
+      ),
+    sqlFile: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "A path to a local .sql file whose UTF-8 contents are read and executed on a single MySQL connection. Either this or sql must be provided, not both. The server reads the file from the machine where the MCP server runs, so only paths the operator trusts should be passed."
+      ),
+    useTransaction: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "When true, the server wraps the whole script in START TRANSACTION and COMMIT, rolling back on failure. Defaults to false meaning each statement runs in its own implicit transaction. Note: DDL such as CREATE, ALTER, DROP, TRUNCATE, and GRANT cause an implicit commit in MySQL and cannot be rolled back even with this enabled."
+      )
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const hasSql = typeof value.sql === "string" && value.sql.length > 0;
+    const hasSqlFile = typeof value.sqlFile === "string" && value.sqlFile.length > 0;
+
+    if (hasSql === hasSqlFile) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [hasSql ? "sql" : "sqlFile"],
+        message: "Exactly one of sql or sqlFile must be provided"
+      });
+    }
+  });
 const redisKeySchema = z.object({
   databaseKey: z
     .string()
@@ -169,6 +215,15 @@ type ToolExecutionContext = {
     databaseKey: string;
     sql: string;
     params?: unknown[];
+  }): Promise<{ status: "confirmed"; databaseFingerprint: string }>;
+  confirmScriptExecution(input: {
+    databaseKey: string;
+    sourceKind: "file" | "inline";
+    sourceLabel: string;
+    scriptLength: number;
+    statementCount: number;
+    ddlKeywords: string[];
+    highRiskKeywords: string[];
   }): Promise<{ status: "confirmed"; databaseFingerprint: string }>;
 };
 
@@ -230,6 +285,56 @@ function assertSqlTarget(databaseKey: string, config: LoadedConfig): Exclude<Loa
   }
 
   return database;
+}
+
+interface ScriptSourceInput {
+  sql?: string;
+  sqlFile?: string;
+}
+
+interface ResolvedScriptSource {
+  scriptText: string;
+  sourceKind: "file" | "inline";
+  sourceLabel: string;
+}
+
+/**
+ * 解析 execute_script 的输入来源：整段字符串或本地 .sql 文件。
+ * 只读取可信任的 .sql 文本文件，限制文件大小避免内存风险。
+ */
+async function resolveScriptSource(input: ScriptSourceInput): Promise<ResolvedScriptSource> {
+  if (typeof input.sqlFile === "string" && input.sqlFile.length > 0) {
+    const filename = resolve(input.sqlFile);
+    if (extname(filename).toLowerCase() !== ".sql") {
+      throw new ApplicationError("INVALID_ARGUMENT", "sqlFile must point to a .sql file");
+    }
+
+    let contents: string;
+    try {
+      const buffer = await readFile(filename);
+      if (buffer.length > 2 * 1024 * 1024) {
+        throw new ApplicationError("INVALID_ARGUMENT", "sqlFile exceeds the 2 MiB size limit");
+      }
+      contents = buffer.toString("utf8");
+    } catch (error) {
+      if (error instanceof ApplicationError) {
+        throw error;
+      }
+      throw new ApplicationError("INVALID_ARGUMENT", `Unable to read sqlFile: ${filename}`);
+    }
+
+    return {
+      scriptText: contents,
+      sourceKind: "file",
+      sourceLabel: filename
+    };
+  }
+
+  return {
+    scriptText: input.sql ?? "",
+    sourceKind: "inline",
+    sourceLabel: "inline SQL"
+  };
 }
 
 function likePattern(pattern: string): string {
@@ -1115,6 +1220,71 @@ export function buildToolRegistry(): ToolDefinition[] {
         };
       });
     }
+    ),
+    makeTool(
+      "execute_script",
+      buildToolDescription({
+        whenToUse:
+          "Use this to run a whole SQL script at once: either a full SQL string or a local .sql file. This is useful when the script relies on session variables (for example SET @var = 1 followed by statements that use @var), stored procedures, temporary tables, or a series of DML that must run on one connection. Each supported engine adapter decides whether the script can run on one connection; the MySQL adapter passes the whole script with multipleStatements enabled, so session variables remain valid across statements.",
+        whenNotToUse:
+          "Do not use it on a target whose adapter does not support script execution (it returns NOT_SUPPORTED). Do not use it on targets configured as readonly. Do not use it for a single read-only query (use execute_query instead). If you need per-statement position of a failure with partial results, this tool will not provide that because it does not split the script client-side.",
+        inputExpectations:
+          "Requires databaseKey (a writable SQL target whose adapter supports scripts), and exactly one of sql (the full script string) or sqlFile (a local .sql file path). Optional useTransaction defaults to false. When enabled, the adapter wraps the script in a transaction and commits on success, rolling back on failure. WARNING: DDL statements such as CREATE, ALTER, DROP, TRUNCATE, and GRANT cause an implicit commit in MySQL and cannot be rolled back even with useTransaction enabled. The exact change is always confirmed interactively before execution. Scripts with dangerous constructs such as INTO OUTFILE are blocked. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
+        databaseSupport: "SQL targets only, and only when readonly is false; engine support is determined by the adapter, with MySQL currently implemented."
+      }),
+      executeScriptSchema,
+      async (args, context) => {
+        assertSqlTarget(args.databaseKey, context.getConfig());
+
+        const { scriptText, sourceKind, sourceLabel } = await resolveScriptSource(args);
+        const scriptSecurity = scanScriptRisk(scriptText);
+
+        const confirmation = await context.confirmScriptExecution({
+          databaseKey: args.databaseKey,
+          sourceKind,
+          sourceLabel,
+          scriptLength: scriptText.length,
+          statementCount: scriptSecurity.statementCount,
+          ddlKeywords: scriptSecurity.ddlKeywords,
+          highRiskKeywords: scriptSecurity.highRiskKeywords
+        });
+
+        const confirmedDatabase = context.getConfig().databaseMap.get(args.databaseKey);
+        if (
+          !confirmedDatabase ||
+          fingerprintDatabaseTarget(confirmedDatabase) !== confirmation.databaseFingerprint
+        ) {
+          throw new ApplicationError(
+            "INVALID_ARGUMENT",
+            "Database target configuration changed after confirmation; request confirmation again"
+          );
+        }
+
+        if (scriptSecurity.highRiskKeywords.includes("OUTFILE") || scriptSecurity.highRiskKeywords.includes("DUMPFILE")) {
+          throw new ApplicationError(
+            "INVALID_ARGUMENT",
+            "Script contains a write to a server-side file (INTO OUTFILE/DUMPFILE) which is not allowed through execute_script"
+          );
+        }
+
+        return context.useSqlDatabase(args.databaseKey, async (adapter) => {
+          if (adapter.config.readonly) {
+            throw new ApplicationError("NOT_SUPPORTED", `${args.databaseKey} is configured as readonly`);
+          }
+
+          const result = await adapter.executeScript(scriptText, {
+            useTransaction: args.useTransaction ?? false
+          });
+
+          return {
+            databaseKey: args.databaseKey,
+            type: adapter.config.type,
+            scriptMode: sourceKind,
+            source: sourceLabel,
+            ...result
+          };
+        });
+      }
     ),
     makeTool(
       "redis_get",

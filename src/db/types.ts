@@ -7,6 +7,7 @@ import type {
   QueryResult,
   RedisScanResult,
   SchemaInfo,
+  ScriptExecutionResult,
   StatementResult,
   TableStatistics,
   TableInfo
@@ -29,6 +30,7 @@ export interface SqlDatabaseAdapter extends DatabaseAdapter {
   analyzeQuery(sql: string, params: unknown[] | undefined, maxRows: number): Promise<QueryResult>;
   executeQuery(sql: string, params: unknown[] | undefined, maxRows: number): Promise<QueryResult>;
   executeStatement(sql: string, params?: unknown[]): Promise<StatementResult>;
+  executeScript(sql: string, options: { useTransaction: boolean }): Promise<ScriptExecutionResult>;
 }
 
 export interface RedisDatabaseAdapter extends DatabaseAdapter {

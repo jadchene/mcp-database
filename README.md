@@ -101,15 +101,13 @@ Minimal SQL target example:
 
 ## Supported Databases
 
-| Database | Query | Metadata | `explain_query` | `analyze_query` | Writes |
-| --- | --- | --- | --- | --- | --- |
-| MySQL | Yes | Yes | Yes | Yes | Yes |
-| PostgreSQL | Yes | Yes | Yes | Yes | Yes |
-| openGauss | Yes | Yes | Yes | Yes | Yes |
-| Oracle | Yes | Yes | Yes | No | Yes |
-| Redis | Yes | Limited | No | No | No |
-
-`show_create_table` currently supports MySQL and Oracle. PostgreSQL and openGauss return `NOT_SUPPORTED`.
+| Database | Query | Metadata | `explain_query` | `analyze_query` | Writes | `execute_script` |
+| --- | --- | --- | --- | --- | --- | --- |
+| MySQL | Yes | Yes | Yes | Yes | Yes | Yes |
+| PostgreSQL | Yes | Yes | Yes | Yes | Yes | No |
+| openGauss | Yes | Yes | Yes | Yes | Yes | No |
+| Oracle | Yes | Yes | Yes | No | Yes | No |
+| Redis | Yes | Limited | No | No | No | No |
 
 Operational tools such as `show_variables`, `find_long_running_queries`, `find_blocking_sessions`, and `show_locks` depend on the visibility and privileges of the configured database account.
 
@@ -150,6 +148,7 @@ SQL execution and performance:
 | `explain_query` | Return the static execution plan for a read-only SQL query. Pass the original SQL, not `EXPLAIN ...`. |
 | `analyze_query` | Return runtime analysis for a read-only SQL query where supported. Pass the original SQL, not `EXPLAIN ANALYZE ...`. |
 | `execute_statement` | Run one non-query SQL statement on a writable target after explicit confirmation. |
+| `execute_script` | Run one whole SQL script on a single connection, optionally inside a transaction, after explicit confirmation. |
 
 Redis:
 
@@ -167,6 +166,7 @@ Redis:
 4. Use `execute_query` for read-only SQL.
 5. Use `explain_query` or `analyze_query` for performance work.
 6. Use `execute_statement` only when the target is writable and the user has approved the exact change.
+7. Use `execute_script` when a script must run on one connection and relies on session variables (for example `SET @var = 1`), stored procedures, or a series of DML.
 
 ## Safety Model
 
@@ -175,6 +175,7 @@ Redis:
 - SQL targets are controlled by the per-target `readonly` flag. `execute_statement` is rejected when the selected target has `readonly: true`.
 - `execute_statement` accepts non-query SQL only. It rejects `SELECT` and other read-only SQL so read and write workflows stay separate.
 - Writable SQL is supported only for MySQL, Oracle, PostgreSQL, and openGauss targets configured with `readonly: false`.
+- `execute_script` runs a whole script on one connection (so session variables such as `@var` are preserved) and requires interactive confirmation. With `useTransaction: true` it commits on success and rolls back on failure, but DDL such as `CREATE`/`ALTER`/`DROP`/`TRUNCATE`/`GRANT` causes an implicit commit and cannot be rolled back. It also blocks scripts that write to a server-side file (`INTO OUTFILE`/`DUMPFILE`).
 - Redis tools are read-oriented and do not expose write operations.
 - `show_loaded_config` and discovery tools return sanitized summaries. Passwords are never returned to the MCP client.
 - Runtime logs store only SQL length, a fingerprint, and parameter count; SQL text and parameter values are not logged.

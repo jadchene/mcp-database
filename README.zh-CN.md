@@ -101,15 +101,13 @@ MCP_DATABASE_CONFIG=./config/databases.json mcp-database-service
 
 ## 支持的数据库
 
-| 数据库 | 查询 | 元数据 | `explain_query` | `analyze_query` | 写入 |
-| --- | --- | --- | --- | --- | --- |
-| MySQL | 支持 | 支持 | 支持 | 支持 | 支持 |
-| PostgreSQL | 支持 | 支持 | 支持 | 支持 | 支持 |
-| openGauss | 支持 | 支持 | 支持 | 支持 | 支持 |
-| Oracle | 支持 | 支持 | 支持 | 不支持 | 支持 |
-| Redis | 支持 | 有限支持 | 不支持 | 不支持 | 不支持 |
-
-`show_create_table` 当前支持 MySQL 和 Oracle。PostgreSQL 与 openGauss 返回 `NOT_SUPPORTED`。
+| 数据库 | 查询 | 元数据 | `explain_query` | `analyze_query` | 写入 | `execute_script` |
+| --- | --- | --- | --- | --- | --- | --- |
+| MySQL | 支持 | 支持 | 支持 | 支持 | 支持 | 支持 |
+| PostgreSQL | 支持 | 支持 | 支持 | 支持 | 支持 | 不支持 |
+| openGauss | 支持 | 支持 | 支持 | 支持 | 支持 | 不支持 |
+| Oracle | 支持 | 支持 | 支持 | 不支持 | 支持 | 不支持 |
+| Redis | 支持 | 有限支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 
 `show_variables`、`find_long_running_queries`、`find_blocking_sessions`、`show_locks` 等运维工具依赖数据库账号具备相应可见性和权限。
 
@@ -150,6 +148,7 @@ SQL 执行与性能：
 | `explain_query` | 返回只读 SQL 的静态执行计划。传原始 SQL，不要传 `EXPLAIN ...`。 |
 | `analyze_query` | 在支持的数据库上返回只读 SQL 的运行时分析。传原始 SQL，不要传 `EXPLAIN ANALYZE ...`。 |
 | `execute_statement` | 在可写目标上，经明确确认后执行一条非查询 SQL。 |
+| `execute_script` | 在一条连接上整段执行一段 SQL 脚本，可选开启事务，执行前需明确确认。 |
 
 Redis：
 
@@ -167,6 +166,7 @@ Redis：
 4. 使用 `execute_query` 执行只读 SQL。
 5. 使用 `explain_query` 或 `analyze_query` 做性能分析。
 6. 只有当目标可写且用户确认了精确变更后，才使用 `execute_statement`。
+7. 当脚本需要在同一连接上运行、并依赖会话变量（例如 `SET @var = 1`）、存储过程或一组 DML 时，才使用 `execute_script`。
 
 ## 安全模型
 
@@ -175,6 +175,7 @@ Redis：
 - SQL 目标由每个 target 的 `readonly` 标志控制。当目标配置 `readonly: true` 时，`execute_statement` 会被拒绝。
 - `execute_statement` 只接受非查询 SQL。它会拒绝 `SELECT` 和其他只读 SQL，确保读写流程分离。
 - 可写 SQL 仅支持配置为 `readonly: false` 的 MySQL、Oracle、PostgreSQL 和 openGauss 目标。
+- `execute_script` 在一条连接上整段运行脚本（因此 `@var` 等会话变量保留），并需交互式确认。开启 `useTransaction` 时成功提交、失败回滚，但 `CREATE`、`ALTER`、`DROP`、`TRUNCATE`、`GRANT` 等 DDL 会隐式提交、无法回滚。它也会拦截写入服务器文件的脚本（`INTO OUTFILE`/`DUMPFILE`）。
 - Redis 工具是只读取向，不暴露写操作。
 - `show_loaded_config` 和发现工具只返回脱敏摘要。密码不会返回给 MCP 客户端。
 - 运行日志默认只记录 SQL 长度、指纹和参数数量，不记录 SQL 原文或参数值。

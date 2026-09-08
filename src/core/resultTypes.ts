@@ -56,6 +56,32 @@ export interface StatementResult {
   affectedRows: number | null;
 }
 
+/**
+ * 一条 SQL 脚本语句的执行结果（由数据库驱动在整段直传时返回）。
+ * MySQL 开启 multipleStatements 后返回结果数组，每一项对应一条语句。
+ */
+export interface ScriptStatementResult {
+  index: number;
+  /** 语句结果类型：affected 表示受影响行数，rows 表示查询结果行。 */
+  kind: "affected" | "rows";
+  affectedRows: number | null;
+  rowCount: number | null;
+}
+
+/**
+ * SQL 脚本整体执行结果。事务开启时以 outcome 表示提交/回滚状态。
+ */
+export interface ScriptExecutionResult {
+  command: string;
+  statementCount: number;
+  statements: ScriptStatementResult[];
+  totalAffectedRows: number | null;
+  transaction: {
+    enabled: boolean;
+    outcome: "committed" | "rolled_back" | "not_applied";
+  };
+}
+
 export interface RedisScanResult {
   nextCursor: string;
   keys: string[];

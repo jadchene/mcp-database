@@ -21,9 +21,26 @@ interface StatementConfirmationInput {
   params?: unknown[];
 }
 
+interface ScriptConfirmationInput {
+  databaseKey: string;
+  sourceKind: "file" | "inline";
+  sourceLabel: string;
+  scriptLength: number;
+  statementCount: number;
+  ddlKeywords: string[];
+  highRiskKeywords: string[];
+}
+
 interface StatementConfirmationContext {
   database: LoadedConfig["databases"][number];
   input: StatementConfirmationInput;
+  supportsInteractiveConfirmation: boolean;
+  elicitConfirmation?: (message: string) => Promise<"yes" | "no">;
+}
+
+interface ScriptConfirmationContext {
+  database: LoadedConfig["databases"][number];
+  input: ScriptConfirmationInput;
   supportsInteractiveConfirmation: boolean;
   elicitConfirmation?: (message: string) => Promise<"yes" | "no">;
 }
@@ -254,6 +271,49 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 : "no";
             }
           });
+        },
+        async confirmScriptExecution(input) {
+          const database = currentConfig.databaseMap.get(input.databaseKey);
+          if (!database) {
+            throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${input.databaseKey}`);
+          }
+
+          const clientCapabilities = server.getClientCapabilities();
+          return confirmScriptExecution({
+            database,
+            input,
+            supportsInteractiveConfirmation: Boolean(clientCapabilities?.elicitation),
+            elicitConfirmation: async (message) => {
+              const confirmation = await server.elicitInput({
+                mode: "form",
+                message,
+                requestedSchema: {
+                  type: "object",
+                  properties: {
+                    decision: {
+                      type: "string",
+                      title: "Execute this SQL script?",
+                      description: "Choose yes to execute the script described above, or no to reject it.",
+                      enum: ["yes", "no"]
+                    }
+                  },
+                  required: ["decision"]
+                }
+              });
+
+              log("info", "Script execution waiting for interactive confirmation", {
+                toolName: "execute_script",
+                databaseKey: input.databaseKey,
+                sourceKind: input.sourceKind,
+                statementCount: input.statementCount,
+                confirmationMode: "interactive"
+              });
+
+              return confirmation.action === "accept" && confirmation.content?.decision === "yes"
+                ? "yes"
+                : "no";
+            }
+          });
         }
       });
 
@@ -439,6 +499,94 @@ export async function confirmStatementExecution(
     databaseKey: input.databaseKey,
     sql: input.sql,
     params: input.params ?? [],
+    confirmationMode: "interactive"
+  });
+  return { status: "confirmed", databaseFingerprint };
+}
+
+function buildScriptConfirmationMessage(input: ScriptConfirmationInput): string {
+  const sourceDescription =
+    input.sourceKind === "file"
+      ? `SQL file: ${input.sourceLabel}`
+      : `inline SQL string (${input.scriptLength} chars)`;
+  const ddlWarning =
+    input.ddlKeywords.length > 0
+      ? `\nWARNING: this script contains DDL (${input.ddlKeywords.join(", ")}). DDL causes an implicit commit in MySQL and cannot be rolled back even with a transaction.`
+      : "";
+  const highRiskWarning =
+    input.highRiskKeywords.length > 0
+      ? `\nNote: this script contains high-risk keywords (${input.highRiskKeywords.join(", ")}).`
+      : "";
+
+  return (
+    `Review this SQL script before execution.\n\n` +
+    `Database Key: ${input.databaseKey}\n` +
+    `Source: ${sourceDescription}\n` +
+    `Approximate statements: ${input.statementCount}\n` +
+    ddlWarning +
+    highRiskWarning +
+    `\n\nThe script runs on a single MySQL connection. Session variables such as @var are preserved across statements. ` +
+    `Choose "yes" to execute this script or "no" to reject it.`
+  );
+}
+
+/**
+ * 脚本执行确认：与单语句确认共用 elicitation 通道，但展示脚本来源、条数与 DDL 提示。
+ */
+export async function confirmScriptExecution(
+  context: ScriptConfirmationContext
+): Promise<StatementConfirmationResult> {
+  const {
+    database,
+    input,
+    supportsInteractiveConfirmation,
+    elicitConfirmation
+  } = context;
+
+  if (database.type === "redis") {
+    throw new ApplicationError(
+      "NOT_SUPPORTED",
+      "Redis does not support SQL script execution"
+    );
+  }
+
+  if (database.readonly) {
+    throw new ApplicationError("NOT_SUPPORTED", `${input.databaseKey} is configured as readonly`);
+  }
+
+  const databaseFingerprint = fingerprintDatabaseTarget(database);
+
+  if (!supportsInteractiveConfirmation || !elicitConfirmation) {
+    throw new ApplicationError(
+      "NOT_SUPPORTED",
+      "execute_script requires interactive elicitation, but the MCP client does not support it. The script was not executed."
+    );
+  }
+
+  let decision: "yes" | "no";
+  try {
+    decision = await elicitConfirmation(buildScriptConfirmationMessage(input));
+  } catch (error) {
+    throw new ApplicationError(
+      "NOT_SUPPORTED",
+      "Interactive elicitation failed. The script was not executed.",
+      { cause: error instanceof Error ? error.message : String(error) }
+    );
+  }
+  if (decision !== "yes") {
+    throw new ApplicationError(
+      "USER_DECLINED",
+      "The user explicitly rejected this SQL script. The script was not executed."
+    );
+  }
+
+  log("info", "Script execution confirmed through interactive confirmation", {
+    toolName: "execute_script",
+    databaseKey: input.databaseKey,
+    sourceKind: input.sourceKind,
+    sourceLabel: input.sourceLabel,
+    scriptLength: input.scriptLength,
+    statementCount: input.statementCount,
     confirmationMode: "interactive"
   });
   return { status: "confirmed", databaseFingerprint };

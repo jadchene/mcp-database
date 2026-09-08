@@ -2,6 +2,7 @@ import type { Connection, QueryOptions, RowDataPacket } from "mysql2";
 
 import type { MysqlDatabaseConfig } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
+import type { ScriptExecutionResult, ScriptStatementResult } from "../../core/resultTypes.js";
 import { BaseSqlAdapter } from "./baseSqlAdapter.js";
 
 export class MysqlAdapter extends BaseSqlAdapter {
@@ -29,6 +30,7 @@ export class MysqlAdapter extends BaseSqlAdapter {
           user: this.mysqlConfig.connection.user,
           password: this.mysqlConfig.connection.password,
           connectTimeout: this.mysqlConfig.connection.connectTimeoutMs,
+          multipleStatements: true,
           ssl
         });
         connection.connect((error) => {
@@ -261,6 +263,102 @@ export class MysqlAdapter extends BaseSqlAdapter {
       `,
       params: [schema ?? null, table]
     };
+  }
+
+  /**
+   * 执行整段 SQL 脚本。MySQL 开启 multipleStatements 后，connection.query
+   * 会返回一个结果数组，每一项对应脚本中的一条语句，因此可以拿到逐条结果。
+   * 脚本整体在当前连接上执行，@var 等会话变量在语句间保持有效。
+   */
+  public override async executeScript(
+    sql: string,
+    options: { useTransaction: boolean }
+  ): Promise<ScriptExecutionResult> {
+    if (!this.connection) {
+      throw new ApplicationError("CONNECTION_ERROR", "MySQL connection is not open");
+    }
+
+    try {
+      if (options.useTransaction) {
+        await this.query("START TRANSACTION");
+      }
+
+      const result = await this.runWithTimeout("execute_script", sql, [], () =>
+        this.query(sql, [])
+      );
+
+      const statements = this.normalizeScriptResults(result);
+
+      if (options.useTransaction) {
+        await this.query("COMMIT");
+      }
+
+      const totalAffectedRows = statements.reduce(
+        (sum, statement) => sum + (statement.affectedRows ?? 0),
+        0
+      );
+
+      return {
+        command: "SCRIPT",
+        statementCount: statements.length,
+        statements,
+        totalAffectedRows,
+        transaction: {
+          enabled: options.useTransaction,
+          outcome: options.useTransaction ? "committed" : "not_applied"
+        }
+      };
+    } catch (error) {
+      if (options.useTransaction && this.connection) {
+        await this.query("ROLLBACK").catch(() => undefined);
+      }
+      throw toApplicationError(error, "QUERY_ERROR");
+    }
+  }
+
+  /**
+   * 将 MySQL multipleStatements 返回的结果数组归一化为逐条结果。
+   * 数组项可能是 ResultSetHeader（受影响行数）或 RowDataPacket 数组（查询结果）。
+   */
+  private normalizeScriptResults(result: unknown): ScriptStatementResult[] {
+    const rows = Array.isArray(result) ? result : [result];
+    const statements: ScriptStatementResult[] = [];
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const item = rows[index];
+      if (Array.isArray(item)) {
+        statements.push({
+          index: index + 1,
+          kind: "rows",
+          affectedRows: null,
+          rowCount: item.length
+        });
+        continue;
+      }
+
+      if (item && typeof item === "object" && "affectedRows" in item) {
+        const affectedRows = Number((item as { affectedRows?: number }).affectedRows ?? 0);
+        statements.push({
+          index: index + 1,
+          kind: "affected",
+          affectedRows,
+          rowCount: null
+        });
+        continue;
+      }
+
+      // 无法识别的结果项（例如 SET 语句），保留计数但不生成明细。
+      if (item && typeof item === "object") {
+        statements.push({
+          index: index + 1,
+          kind: "affected",
+          affectedRows: null,
+          rowCount: null
+        });
+      }
+    }
+
+    return statements;
   }
 
   private async query(sql: string, params: unknown[] = []): Promise<unknown> {

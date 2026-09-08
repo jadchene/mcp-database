@@ -72,6 +72,18 @@ test("MySQL listSchemas query avoids the reserved schema alias", () => {
   );
 });
 
+test("default executeScript returns NOT_SUPPORTED for engines without an implementation", async () => {
+  const adapter = new FakeSqlAdapter(config);
+
+  await assert.rejects(
+    () => adapter.executeScript("SET @x := 1; SELECT @x", { useTransaction: false }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "NOT_SUPPORTED"
+  );
+});
+
 class FakeSqlAdapter extends BaseSqlAdapter {
   public readonly events: string[] = [];
   public lastRawSql = "";

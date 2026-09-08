@@ -12,6 +12,7 @@ import type {
   PingResult,
   QueryResult,
   SchemaInfo,
+  ScriptExecutionResult,
   StatementResult,
   TableStatistics,
   TableInfo
@@ -425,6 +426,21 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     }
   }
 
+  /**
+   * 默认实现不支持脚本整段直传，返回 NOT_SUPPORTED。
+   * 各引擎适配器（例如 MySQL）可以覆盖为真实整段执行实现；
+   * 未实现脚本执行的适配器不需要改动，直接沿用此默认值。
+   */
+  public async executeScript(
+    _sql: string,
+    _options: { useTransaction: boolean }
+  ): Promise<ScriptExecutionResult> {
+    throw new ApplicationError(
+      "NOT_SUPPORTED",
+      "execute_script is currently supported only for MySQL targets"
+    );
+  }
+
   private async executeLimitedMetadata(
     operation: string,
     sql: string,
@@ -444,7 +460,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     };
   }
 
-  private async runWithTimeout<T>(
+  protected async runWithTimeout<T>(
     operation: string,
     sql: string,
     params: unknown[] | Record<string, unknown> | undefined,
@@ -463,7 +479,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         }
         settled = true;
         void this.cancelCurrentOperation().finally(() => {
-          const isWrite = operation === "execute_statement";
+          const isWrite = operation === "execute_statement" || operation === "execute_script";
           reject(
             new ApplicationError(isWrite ? "EXECUTION_OUTCOME_UNKNOWN" : "TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
             operation,
