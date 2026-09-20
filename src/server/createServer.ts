@@ -326,7 +326,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2)
+            text: JSON.stringify(result)
           }
         ]
       };

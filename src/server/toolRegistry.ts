@@ -10,12 +10,12 @@ import { ApplicationError } from "../core/errors.js";
 import type { RedisDatabaseAdapter, SqlDatabaseAdapter } from "../db/types.js";
 import { scanScriptRisk } from "../db/scriptGuard.js";
 
-const emptySchema = z.object({}).describe("This tool does not require any input arguments.").strict();
+const emptySchema = z.object({}).strict();
 const databaseKeySchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured target key from list_databases. This is the MCP identifier used to call tools. It is not necessarily the same as connection.databaseName or the physical database name used inside SQL.")
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers.")
 }).strict();
 const metadataMaxRowsSchema = z
   .number()
@@ -23,34 +23,34 @@ const metadataMaxRowsSchema = z
   .min(1)
   .max(1000)
   .optional()
-  .describe("Optional maximum number of metadata rows returned. Default is 200 and the hard limit is 1000.");
+  .describe("Row limit; defaults to 200.");
 const listSchemasSchema = databaseKeySchema.extend({ maxRows: metadataMaxRowsSchema });
 const listTablesSchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured SQL target key from list_databases. Use the configured target key here, not connection.databaseName."),
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
   schema: z
     .string()
     .min(1)
     .optional()
-    .describe("Optional schema name. Omit it to use the database's current or default schema."),
+    .describe("Schema name; omitted uses the current/default schema."),
   maxRows: metadataMaxRowsSchema
 }).strict();
 const describeTableSchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured SQL target key from list_databases. Use the configured target key here, not connection.databaseName."),
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
   schema: z
     .string()
     .min(1)
     .optional()
-    .describe("Optional schema name. Omit it to use the database's current or default schema."),
+    .describe("Schema name; omitted uses the current/default schema."),
   table: z
     .string()
     .min(1)
-    .describe("Table or view name to inspect. Pass only the object name, not a full SQL statement.")
+    .describe("Table or view name.")
 }).strict();
 const limitedDescribeTableSchema = describeTableSchema.extend({ maxRows: metadataMaxRowsSchema });
 const listIndexesSchema = limitedDescribeTableSchema;
@@ -59,22 +59,22 @@ const schemaPatternSchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured SQL target key from list_databases. Use the configured target key here, not connection.databaseName."),
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
   schema: z
     .string()
     .min(1)
     .optional()
-    .describe("Optional schema name. Omit it to use the database's current or default schema."),
+    .describe("Schema name; omitted uses the current/default schema."),
   pattern: z
     .string()
     .min(1)
-    .describe("Case-insensitive search pattern. Pass only part of the table or column name, not SQL wildcards unless the tool explicitly says so.")
+    .describe("Case-insensitive name fragment; no SQL LIKE expression.")
 }).strict();
 const showVariablesSchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured SQL target key from list_databases. Use the configured target key here, not connection.databaseName."),
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
   pattern: z
     .string()
     .min(1)
@@ -85,34 +85,34 @@ const longRunningQueriesSchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured SQL target key from list_databases. Use the configured target key here, not connection.databaseName."),
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
   minDurationSeconds: z
     .number()
     .int()
     .min(0)
     .optional()
-    .describe("Optional minimum runtime threshold in seconds. Defaults to 30.")
+    .describe("Minimum runtime in seconds; defaults to 30.")
 }).strict();
 const executeQuerySchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured SQL target key from list_databases. Use the configured target key to call the tool. Do not confuse it with connection.databaseName when writing SQL."),
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
   sql: z
     .string()
     .min(1)
-    .describe("Original SQL text. Pass the raw query, not JSON, not markdown, and usually not an EXPLAIN wrapper unless the tool explicitly allows it."),
+    .describe("Original SQL without an EXPLAIN wrapper."),
   params: z
     .array(z.unknown())
     .optional()
-    .describe("Optional positional bind parameters matching placeholders in the SQL statement."),
+    .describe("Positional values for SQL placeholders."),
   maxRows: z
     .number()
     .int()
     .min(1)
     .max(1000)
     .optional()
-    .describe("Optional maximum number of rows returned to the client. Default is 200 and the hard limit is 1000.")
+    .describe("Row limit; defaults to 200.")
 }).strict();
 const explainQuerySchema = executeQuerySchema;
 const analyzeQuerySchema = executeQuerySchema;
@@ -120,7 +120,7 @@ const executeStatementSchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured writable SQL target key from list_databases. Use the configured target key to call the tool. Do not confuse it with connection.databaseName when writing SQL."),
+    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
   sql: z
     .string()
     .min(1)
@@ -128,7 +128,7 @@ const executeStatementSchema = z.object({
   params: z
     .array(z.unknown())
     .optional()
-    .describe("Optional positional bind parameters matching placeholders in the SQL statement.")
+    .describe("Positional values for SQL placeholders.")
 }).strict();
 const executeScriptSchema = z
   .object({
@@ -136,28 +136,28 @@ const executeScriptSchema = z
       .string()
       .min(1)
       .describe(
-        "Exact configured writable SQL target key from list_databases. Supported engines are reported by the database adapter; use the key that supports script execution."
+        "Target key from list_databases.key; use databaseName for SQL identifiers."
       ),
     sql: z
       .string()
       .min(1)
       .optional()
       .describe(
-        "The full SQL script string to execute on a single MySQL connection. Either this or sqlFile must be provided, not both. Session variables such as @var are preserved because the whole script runs on one connection. This tool passes the entire string to the MySQL driver with multipleStatements enabled; it does not split statements client-side."
+        "Whole SQL script; provide exactly one of sql or sqlFile. Session variables persist across statements."
       ),
     sqlFile: z
       .string()
       .min(1)
       .optional()
       .describe(
-        "A path to a local .sql file whose UTF-8 contents are read and executed on a single MySQL connection. Either this or sql must be provided, not both. The server reads the file from the machine where the MCP server runs, so only paths the operator trusts should be passed."
+        "UTF-8 .sql file on the MCP server machine, up to 2 MiB; provide exactly one of sql or sqlFile."
       ),
     useTransaction: z
       .boolean()
       .optional()
       .default(false)
       .describe(
-        "When true, the server wraps the whole script in START TRANSACTION and COMMIT, rolling back on failure. Defaults to false meaning each statement runs in its own implicit transaction. Note: DDL such as CREATE, ALTER, DROP, TRUNCATE, and GRANT cause an implicit commit in MySQL and cannot be rolled back even with this enabled."
+        "Wrap the script in a transaction; defaults to false. MySQL DDL implicitly commits and cannot be rolled back."
       )
   })
   .strict()
@@ -177,7 +177,7 @@ const redisKeySchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured Redis target name from list_databases."),
+    .describe("Redis target key from list_databases.key."),
   key: z
     .string()
     .min(1)
@@ -187,23 +187,23 @@ const redisScanSchema = z.object({
   databaseKey: z
     .string()
     .min(1)
-    .describe("Exact configured Redis target name from list_databases."),
+    .describe("Redis target key from list_databases.key."),
   cursor: z
     .string()
     .optional()
-    .describe("Optional SCAN cursor from the previous call. Use 0 or omit it on the first call."),
+    .describe("SCAN cursor; omit or use the string 0 on the first call."),
   pattern: z
     .string()
     .min(1)
     .optional()
-    .describe("Optional Redis key pattern, for example user:* ."),
+    .describe("Redis glob pattern, e.g. user:*."),
   count: z
     .number()
     .int()
     .min(1)
     .max(1000)
     .optional()
-    .describe("Optional SCAN count hint. Default is 100.")
+    .describe("SCAN count hint; defaults to 100.")
 }).strict();
 
 type ToolExecutionContext = {
@@ -260,19 +260,6 @@ function makeTool<T>(
   };
 }
 
-function buildToolDescription(sections: {
-  whenToUse: string;
-  whenNotToUse: string;
-  inputExpectations: string;
-  databaseSupport: string;
-}): string {
-  return [
-    `When to use: ${sections.whenToUse}`,
-    `When not to use: ${sections.whenNotToUse}`,
-    `Input expectations: ${sections.inputExpectations}`,
-    `Database support: ${sections.databaseSupport}`
-  ].join("\n");
-}
 
 function assertSqlTarget(databaseKey: string, config: LoadedConfig): Exclude<LoadedConfig["databases"][number], { type: "redis" }> {
   const database = config.databaseMap.get(databaseKey);
@@ -745,15 +732,7 @@ export function buildToolRegistry(): ToolDefinition[] {
   return [
     makeTool(
       "show_loaded_config",
-      buildToolDescription({
-        whenToUse:
-          "Use this only when you need to inspect the currently loaded configuration snapshot, confirm which config file is active, or diagnose config reload behavior.",
-        whenNotToUse:
-          "Do not use this as the default discovery tool for normal database work. Use list_databases first when you only need callable target names and logical database names.",
-        inputExpectations:
-          "No arguments. Returns the current config path, load timestamp, database count, and each configured target summary without exposing secrets.",
-        databaseSupport: "All configured targets, including SQL databases and Redis."
-      }),
+      "Inspect the active config path, load time, and sanitized target settings.",
       emptySchema,
       async (_args, context) => {
         const config = context.getConfig();
@@ -762,15 +741,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "reload_config",
-      buildToolDescription({
-        whenToUse:
-          "Use this after the JSON config file has been edited and you want the running MCP server to reload the new configuration without restarting the process.",
-        whenNotToUse:
-          "Do not use this when the config file has not changed. Do not assume a failed reload partially updates the state; on failure the previous config remains active.",
-        inputExpectations:
-          "No arguments. Reloads the currently active configPath from disk, validates it fully, and then atomically replaces the in-memory configuration on success.",
-        databaseSupport: "All configured targets, including SQL databases and Redis."
-      }),
+      "Reload the active config file. Invalid updates leave the previous configuration active.",
       emptySchema,
       async (_args, context) => {
         const config = await context.reloadConfig();
@@ -779,15 +750,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "list_databases",
-      buildToolDescription({
-        whenToUse:
-          "Use this first when you do not know which databaseKey values are available or when you want a lightweight list of configured target identifiers and their logical database names before choosing another tool.",
-        whenNotToUse:
-          "Do not use this when you need the full loaded config snapshot or sanitized connection details. Use show_loaded_config for that.",
-        inputExpectations:
-          "No arguments. Returns the configured target key used by other tools in the key field, the logical or physical database identifier from the connection config in the databaseName field, the database type, and the readonly flag. Use key for MCP tool calls. Use databaseName when generating SQL that needs an explicit database name. This tool does not open database connections.",
-        databaseSupport: "All configured targets, including SQL databases and Redis."
-      }),
+      "List configured SQL and Redis targets without connecting. Use key as databaseKey in tool calls and databaseName in SQL.",
       emptySchema,
       async (_args, context) => ({
         items: context.getConfig().databases.map((database) => summarizeDatabaseListItem(database))
@@ -795,15 +758,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "ping_database",
-      buildToolDescription({
-        whenToUse:
-          "Use this for connectivity diagnosis before running metadata, query, or write tools, or when you suspect network, credential, or service availability issues.",
-        whenNotToUse:
-          "Do not use this as a substitute for metadata discovery or SQL execution. A successful ping does not validate schema, table, or query correctness.",
-        inputExpectations:
-          "Requires an exact databaseKey from list_databases, which means the configured target key in the key field. Do not pass connection.databaseName here. Returns database type, success flag, and latency.",
-        databaseSupport: "All configured targets, including SQL databases and Redis."
-      }),
+      "Test SQL or Redis connectivity and report latency.",
       databaseKeySchema,
       async (args, context) => {
         const database = context.getConfig().databaseMap.get(args.databaseKey);
@@ -828,15 +783,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "list_schemas",
-      buildToolDescription({
-        whenToUse:
-          "Use this when you need to discover which schema to inspect before listing tables, describing tables, or writing report and optimization SQL.",
-        whenNotToUse:
-          "Do not use this for Redis or when you already know the exact schema name.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key. Optional maxRows defaults to 200 and is capped at 1000. Returns schema names visible to the configured user and truncated when more rows exist.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "List schemas visible to the SQL target's user. Results may be truncated.",
       listSchemasSchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -847,15 +794,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "list_tables",
-      buildToolDescription({
-        whenToUse:
-          "Use this after list_schemas or when you already know the schema and need to discover available tables and views before building queries or reports.",
-        whenNotToUse:
-          "Do not use this for Redis or when you already know the exact table name and only need column or index metadata.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key. Optional schema and maxRows; maxRows defaults to 200 and is capped at 1000. If schema is omitted, the database's current or default schema is used.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "List SQL tables and views in a schema. Results may be truncated.",
       listTablesSchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -866,15 +805,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "describe_table",
-      buildToolDescription({
-        whenToUse:
-          "Use this before writing report SQL, join SQL, aggregation SQL, export SQL, or optimization advice so you can see column names, types, nullability, defaults, comments, and primary key hints.",
-        whenNotToUse:
-          "Do not use this for Redis or when you only need a high-level table list.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus table. Optional schema and maxRows; maxRows defaults to 200 and is capped at 1000. Returns one item per column and truncated when more rows exist.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Inspect SQL columns, types, defaults, nullability, comments, and primary keys. Results may be truncated.",
       limitedDescribeTableSchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -885,15 +816,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "list_indexes",
-      buildToolDescription({
-        whenToUse:
-          "Use this when analyzing performance, checking whether filter, join, group by, or order by columns are indexed, or reviewing why a query may fall back to full scans.",
-        whenNotToUse:
-          "Do not use this for Redis or as a substitute for runtime plan analysis. Use explain_query or analyze_query for plan details.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus table. Optional schema and maxRows; maxRows defaults to 200 and is capped at 1000. Some databases may return full index definitions instead of per-column detail rows.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Inspect SQL indexes. Some engines return full definitions instead of per-column rows.",
       listIndexesSchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -904,15 +827,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "get_table_statistics",
-      buildToolDescription({
-        whenToUse:
-          "Use this for performance diagnosis, report-query estimation, capacity review, and table health checks. It helps explain whether a table is large, stale, or heavily scanned.",
-        whenNotToUse:
-          "Do not use this when you need exact business query results or row-level data. Statistics may be approximate and database-specific.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus table. Optional schema. Returns one statistics object or null if the table metadata is unavailable.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Get approximate, engine-specific SQL table statistics; returns null when unavailable.",
       getTableStatisticsSchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -923,15 +838,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "show_create_table",
-      buildToolDescription({
-        whenToUse:
-          "Use this when you need the database-side table or view definition instead of just column metadata, especially before schema changes, migration work, or exact DDL review.",
-        whenNotToUse:
-          "Do not use this when you only need columns or indexes. Use describe_table and list_indexes for cheaper structured metadata.",
-        inputExpectations:
-          "Requires databaseKey and table. Optional schema. The object name should be a table or view name, not a full SQL statement. Some databases may return NOT_SUPPORTED if exact DDL extraction is not available in the current implementation.",
-        databaseSupport: "SQL databases only. MySQL and Oracle are supported. PostgreSQL and openGauss currently return NOT_SUPPORTED."
-      }),
+      "Get table or view DDL. MySQL and Oracle only; PostgreSQL and openGauss return NOT_SUPPORTED.",
       describeTableSchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -969,15 +876,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "list_views",
-      buildToolDescription({
-        whenToUse:
-          "Use this when you need to discover available SQL views before reporting, debugging view logic, or choosing between base tables and views.",
-        whenNotToUse:
-          "Do not use this for Redis or when you specifically need all tables and views together. Use list_tables for the broader object list.",
-        inputExpectations:
-          "Requires databaseKey. Optional schema. Returns one item per view name under the given schema or the database default schema.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "List SQL views in a schema.",
       listTablesSchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -991,15 +890,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "search_tables",
-      buildToolDescription({
-        whenToUse:
-          "Use this when you know part of a table or view name and need to discover matching objects before writing SQL against an unfamiliar schema.",
-        whenNotToUse:
-          "Do not use this for Redis or when you already know the exact object name. Use list_tables or list_views for complete lists within one schema.",
-        inputExpectations:
-          "Requires databaseKey and a partial name pattern. Optional schema. The service applies the wildcard matching for you, so pass the meaningful text fragment instead of a full SQL LIKE expression.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Find SQL tables and views by a name fragment.",
       schemaPatternSchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1013,15 +904,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "search_columns",
-      buildToolDescription({
-        whenToUse:
-          "Use this when you know part of a column name such as user_id, status, created_at, or tenant_id and need to find where it appears across a schema.",
-        whenNotToUse:
-          "Do not use this for Redis or when you already know the exact table and only need its columns. Use describe_table for that.",
-        inputExpectations:
-          "Requires databaseKey and a partial column-name pattern. Optional schema. The service applies wildcard matching for you.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Find SQL columns by a name fragment across a schema.",
       schemaPatternSchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1035,15 +918,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "show_variables",
-      buildToolDescription({
-        whenToUse:
-          "Use this to inspect database runtime parameters such as character set, time zone, transaction settings, memory settings, SQL mode, or database-specific tuning variables.",
-        whenNotToUse:
-          "Do not use this when you need schema metadata or query plans. This tool is for instance or session configuration inspection.",
-        inputExpectations:
-          "Requires databaseKey. Optional pattern filters variable names. Returns name-value rows.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Inspect SQL runtime parameters as name-value rows.",
       showVariablesSchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1057,15 +932,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "find_long_running_queries",
-      buildToolDescription({
-        whenToUse:
-          "Use this during database troubleshooting when you want to see currently running sessions or statements that have been active longer than a threshold.",
-        whenNotToUse:
-          "Do not use this for historical slow-query analysis or for metadata discovery. It only reports currently running sessions visible to the configured account.",
-        inputExpectations:
-          "Requires databaseKey. Optional minDurationSeconds defaults to 30. Returns current long-running session rows when the database exposes them to the configured user.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "List currently running SQL sessions above the duration threshold, subject to account visibility.",
       longRunningQueriesSchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1079,15 +946,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "find_blocking_sessions",
-      buildToolDescription({
-        whenToUse:
-          "Use this when you suspect lock waits, blocking, or deadlock-like symptoms and you need to identify which session is blocking which other session right now.",
-        whenNotToUse:
-          "Do not use this for normal metadata discovery or for historical lock analysis. This tool only reports currently visible blocking relationships.",
-        inputExpectations:
-          "Requires databaseKey only. Returns zero or more blocking relationships when supported by the target database and the configured account has sufficient visibility.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Find current SQL blocking relationships visible to the configured account.",
       databaseKeySchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1101,15 +960,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "show_locks",
-      buildToolDescription({
-        whenToUse:
-          "Use this when diagnosing lock contention, blocked DDL, row locks, metadata locks, or object-level locking behavior that may affect application performance.",
-        whenNotToUse:
-          "Do not use this as a substitute for query plans or table metadata. This tool is specifically for currently visible lock state.",
-        inputExpectations:
-          "Requires databaseKey only. Returns current lock rows as exposed by the target database and the permissions of the configured account.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Inspect current SQL locks visible to the configured account.",
       databaseKeySchema,
       async (args, context) => {
         const database = assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1123,15 +974,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "execute_query",
-      buildToolDescription({
-        whenToUse:
-          "Use this to run one read-only SQL query and get result rows for analysis, report development, validation, and ad hoc investigation.",
-        whenNotToUse:
-          "Do not use this for INSERT, UPDATE, DELETE, MERGE, DDL, or multi-statement SQL. Do not use it for runtime plan analysis; use analyze_query instead.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus original query SQL. Allowed SQL shapes are SELECT, SHOW, DESCRIBE, DESC, or WITH ... SELECT. Use explain_query instead of adding an EXPLAIN wrapper. Optional params and maxRows. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Run one read-only SQL statement: SELECT, SHOW, DESCRIBE, DESC, or WITH ... SELECT.",
       executeQuerySchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -1142,15 +985,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "explain_query",
-      buildToolDescription({
-        whenToUse:
-          "Use this to inspect the static execution plan of one read-only query before changing SQL, adding indexes, or deciding whether runtime analysis is worth the cost.",
-        whenNotToUse:
-          "Do not use this when you need actual runtime metrics such as real row counts, buffer usage, or elapsed execution behavior. Use analyze_query for that.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus the original query SQL, usually SELECT or WITH ... SELECT. Do not include EXPLAIN in the sql argument; the server adds the database-specific EXPLAIN wrapper. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
-        databaseSupport: "SQL databases only: MySQL, Oracle, PostgreSQL, and openGauss."
-      }),
+      "Get a static plan for a read-only SQL query without executing it. Pass original SQL; the server adds EXPLAIN.",
       explainQuerySchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -1161,15 +996,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "analyze_query",
-      buildToolDescription({
-        whenToUse:
-          "Use this when you need runtime analysis for a read-only query, such as actual row counts, execution-time behavior, or richer plan diagnostics during SQL optimization.",
-        whenNotToUse:
-          "Do not use this for write SQL, multi-statement SQL, or cheap metadata inspection. It is more expensive than explain_query because it may really execute the query.",
-        inputExpectations:
-          "Requires databaseKey using the configured target key from list_databases.key, plus the original query SQL. Do not pass EXPLAIN ANALYZE SQL; the server adds the database-specific analyze wrapper automatically. Optional params and maxRows. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
-        databaseSupport: "Currently supported for MySQL, PostgreSQL, and openGauss. Oracle currently returns NOT_SUPPORTED."
-      }),
+      "Execute a read-only query for runtime plan metrics. Pass original SQL. MySQL, PostgreSQL, and openGauss only; Oracle returns NOT_SUPPORTED.",
       analyzeQuerySchema,
       async (args, context) =>
       context.useSqlDatabase(args.databaseKey, async (adapter) => ({
@@ -1180,15 +1007,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "execute_statement",
-      buildToolDescription({
-        whenToUse:
-          "Use this only for non-query SQL on writable targets, such as INSERT, UPDATE, DELETE, MERGE, or DDL, when the user explicitly wants a change to be made.",
-        whenNotToUse:
-          "Do not use this for SELECT or other readonly SQL. Do not use it on targets configured as readonly. Avoid it unless a write is truly required.",
-        inputExpectations:
-          "Requires databaseKey using the configured writable SQL target key from list_databases.key, plus one non-query SQL statement. Interactive elicitation confirmation is always required before execution. If the client does not support elicitation or the elicitation request fails, the operation returns an error without executing. High-risk statements such as UPDATE or DELETE without WHERE are specially highlighted. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
-        databaseSupport: "Writable SQL targets only: MySQL, Oracle, PostgreSQL, and openGauss when readonly is false."
-      }),
+      "Execute one non-query SQL statement on a writable target. Requires interactive confirmation; no execution if confirmation is unavailable or declined.",
       executeStatementSchema,
       async (args, context) => {
       const confirmation = await context.confirmStatementExecution({
@@ -1223,15 +1042,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "execute_script",
-      buildToolDescription({
-        whenToUse:
-          "Use this to run a whole SQL script at once: either a full SQL string or a local .sql file. This is useful when the script relies on session variables (for example SET @var = 1 followed by statements that use @var), stored procedures, temporary tables, or a series of DML that must run on one connection. Each supported engine adapter decides whether the script can run on one connection; the MySQL adapter passes the whole script with multipleStatements enabled, so session variables remain valid across statements.",
-        whenNotToUse:
-          "Do not use it on a target whose adapter does not support script execution (it returns NOT_SUPPORTED). Do not use it on targets configured as readonly. Do not use it for a single read-only query (use execute_query instead). If you need per-statement position of a failure with partial results, this tool will not provide that because it does not split the script client-side.",
-        inputExpectations:
-          "Requires databaseKey (a writable SQL target whose adapter supports scripts), and exactly one of sql (the full script string) or sqlFile (a local .sql file path). Optional useTransaction defaults to false. When enabled, the adapter wraps the script in a transaction and commits on success, rolling back on failure. WARNING: DDL statements such as CREATE, ALTER, DROP, TRUNCATE, and GRANT cause an implicit commit in MySQL and cannot be rolled back even with useTransaction enabled. The exact change is always confirmed interactively before execution. Scripts with dangerous constructs such as INTO OUTFILE are blocked. When SQL needs an explicit database name, refer to list_databases.databaseName, not list_databases.key.",
-        databaseSupport: "SQL targets only, and only when readonly is false; engine support is determined by the adapter, with MySQL currently implemented."
-      }),
+      "Execute a whole SQL script on one connection, preserving session state. Writable MySQL targets only; other adapters return NOT_SUPPORTED. Requires interactive confirmation. Scripts are not split; partial results are unavailable.",
       executeScriptSchema,
       async (args, context) => {
         assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1288,15 +1099,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "redis_get",
-      buildToolDescription({
-        whenToUse:
-          "Use this to read one Redis string key when you already know the exact key name and the key is expected to hold a string value.",
-        whenNotToUse:
-          "Do not use this for key discovery, pattern search, or hash inspection. Use redis_scan for discovery and redis_hgetall for hash keys.",
-        inputExpectations:
-          "Requires databaseKey and exact key name. Returns null when the key does not exist.",
-        databaseSupport: "Redis targets only."
-      }),
+      "Read an exact Redis string key; returns null if absent.",
       redisKeySchema,
       async (args, context) =>
       context.useRedisDatabase(args.databaseKey, async (adapter) => ({
@@ -1308,15 +1111,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "redis_hgetall",
-      buildToolDescription({
-        whenToUse:
-          "Use this to inspect one Redis hash key when you expect multiple named fields under the key.",
-        whenNotToUse:
-          "Do not use this for string keys or key discovery. Use redis_get for strings and redis_scan for discovery.",
-        inputExpectations:
-          "Requires databaseKey and exact key name. Returns all hash fields and values.",
-        databaseSupport: "Redis targets only."
-      }),
+      "Read all fields of an exact Redis hash key.",
       redisKeySchema,
       async (args, context) =>
       context.useRedisDatabase(args.databaseKey, async (adapter) => ({
@@ -1328,15 +1123,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "redis_scan",
-      buildToolDescription({
-        whenToUse:
-          "Use this for Redis key discovery when you do not know the exact key name or when you need to browse keys by pattern in a safer way than KEYS.",
-        whenNotToUse:
-          "Do not use this when you already know the exact key and only want its value. Use redis_get or redis_hgetall directly in that case.",
-        inputExpectations:
-          "Requires databaseKey. Optional cursor, pattern, and count. Repeat calls with the returned nextCursor until it becomes 0 or until enough keys are collected.",
-        databaseSupport: "Redis targets only."
-      }),
+      "Discover Redis keys incrementally. Continue with nextCursor until it is 0 or enough keys are found.",
       redisScanSchema,
       async (args, context) =>
       context.useRedisDatabase(args.databaseKey, async (adapter) => ({
