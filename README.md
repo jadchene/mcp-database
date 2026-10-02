@@ -184,11 +184,10 @@ Redis:
 
 ### Write Confirmation
 
-- Manual user confirmation is always required before `execute_statement` executes.
-- When the MCP client supports elicitation, the server shows the exact SQL, parameters, target, and risk level, then asks the user to choose `yes` or `no`.
-- A `no`, cancel, or decline response is returned as an explicit user rejection and the SQL is not executed.
+- `execute_statement` and `execute_script` require approval before execution. Confirmation shows the actual SQL, parameters, target, and risk level.
+- Codex clients receive metadata requesting automatic review. Automatic review is optional: when `approvals_reviewer = "auto_review"` is enabled in Codex, Codex policy decides approval; otherwise, use the normal Accept / Decline / Cancel confirmation. Other clients use standard confirmation.
+- Accept executes the operation; decline or cancel leaves it unexecuted.
 - When elicitation is unavailable or fails, the server returns an explicit error and does not execute the SQL.
-- Interactive confirmation includes the full SQL, parameters, target, risk level, and risk hints for dangerous statements such as `UPDATE` or `DELETE` without `WHERE`.
 
 ## Config Reload
 

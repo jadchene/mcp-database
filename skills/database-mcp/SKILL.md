@@ -18,6 +18,6 @@ Use the database MCP service proactively for database-related work.
 
 ## Write Safety
 
-- Let the user review the exact SQL, parameters, and risk level through the server's elicitation prompt.
+- Submit the exact SQL, parameters, and risk level through server elicitation; Codex can review it automatically when enabled.
 - Stop after rejection, cancellation, or elicitation failure; never attempt a fallback write.
 - `execute_script` uses the server's confirmation prompt. Set `useTransaction: true` only when the whole DML batch must roll back as one; DDL cannot be rolled back once it runs.

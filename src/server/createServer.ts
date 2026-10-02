@@ -14,6 +14,7 @@ import { createClient } from "../db/clientFactory.js";
 import type { RedisDatabaseAdapter, SqlDatabaseAdapter } from "../db/types.js";
 import { buildToolRegistry } from "./toolRegistry.js";
 import { SERVICE_NAME, SERVICE_VERSION } from "../version.js";
+import { buildCodexApprovalMeta } from "./codexApproval.js";
 
 interface StatementConfirmationInput {
   databaseKey: string;
@@ -23,6 +24,8 @@ interface StatementConfirmationInput {
 
 interface ScriptConfirmationInput {
   databaseKey: string;
+  /** 文件或内联来源解析后的实际 SQL，用于自动审批。 */
+  sql: string;
   sourceKind: "file" | "inline";
   sourceLabel: string;
   scriptLength: number;
@@ -246,16 +249,12 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 message,
                 requestedSchema: {
                   type: "object",
-                  properties: {
-                    decision: {
-                      type: "string",
-                      title: "Execute this SQL statement?",
-                      description: "Choose yes to execute the exact SQL shown above, or no to reject it.",
-                      enum: ["yes", "no"]
-                    }
-                  },
-                  required: ["decision"]
-                }
+                  properties: {}
+                },
+                _meta: buildCodexApprovalMeta(
+                  server.getClientVersion(), tool.name, request.params.arguments ?? {}, message,
+                  inspectSqlStatement(input.sql).riskLevel !== "normal"
+                )
               });
 
               log("info", "Write statement waiting for interactive confirmation", {
@@ -266,7 +265,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 confirmationMode: "interactive"
               });
 
-              return confirmation.action === "accept" && confirmation.content?.decision === "yes"
+              return confirmation.action === "accept"
                 ? "yes"
                 : "no";
             }
@@ -289,16 +288,13 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 message,
                 requestedSchema: {
                   type: "object",
-                  properties: {
-                    decision: {
-                      type: "string",
-                      title: "Execute this SQL script?",
-                      description: "Choose yes to execute the script described above, or no to reject it.",
-                      enum: ["yes", "no"]
-                    }
-                  },
-                  required: ["decision"]
-                }
+                  properties: {}
+                },
+                _meta: buildCodexApprovalMeta(
+                  server.getClientVersion(), tool.name,
+                  { ...request.params.arguments, resolvedSql: input.sql }, message,
+                  input.ddlKeywords.length > 0 || input.highRiskKeywords.length > 0
+                )
               });
 
               log("info", "Script execution waiting for interactive confirmation", {
@@ -309,7 +305,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 confirmationMode: "interactive"
               });
 
-              return confirmation.action === "accept" && confirmation.content?.decision === "yes"
+              return confirmation.action === "accept"
                 ? "yes"
                 : "no";
             }
@@ -441,7 +437,7 @@ function buildInteractiveConfirmationMessage(input: StatementConfirmationInput):
     `Risk Details: ${riskSummary}\n` +
     `Parameters: ${params}\n\n` +
     `SQL to execute:\n${input.sql}\n\n` +
-    `Choose "yes" to execute this exact SQL or "no" to reject it.`
+    `Accept to execute this exact SQL; decline or cancel to leave it unexecuted.`
   );
 }
 
@@ -525,8 +521,9 @@ function buildScriptConfirmationMessage(input: ScriptConfirmationInput): string 
     `Approximate statements: ${input.statementCount}\n` +
     ddlWarning +
     highRiskWarning +
+    `\n\nSQL to execute:\n${input.sql}` +
     `\n\nThe script runs on a single MySQL connection. Session variables such as @var are preserved across statements. ` +
-    `Choose "yes" to execute this script or "no" to reject it.`
+    `Accept to execute this script; decline or cancel to leave it unexecuted.`
   );
 }
 

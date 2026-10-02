@@ -184,10 +184,10 @@ Redis：
 
 ### 写入确认
 
-- `execute_statement` 执行前始终需要用户手动确认。
-- 当 MCP 客户端支持 elicitation 时，服务会通过客户端直接请求确认。
+- `execute_statement` 和 `execute_script` 执行前需要审批，确认内容包括实际 SQL、参数、目标和风险等级。
+- Codex 客户端会收到自动审查元数据。自动审查是可选能力：Codex 启用 `approvals_reviewer = "auto_review"` 时由其策略决定审批结果；未启用时按正常的 Accept / Decline / Cancel 操作；其他客户端使用标准确认。
+- 接受后执行；拒绝或取消均不执行。
 - 客户端不支持 elicitation 或 elicitation 请求失败时，服务会直接返回错误且不会执行 SQL。
-- 交互式确认包含 SQL、参数、目标对象、风险等级，以及 `UPDATE` 或 `DELETE` 不带 `WHERE` 等危险语句的风险提示。
 
 ## 配置刷新
 

@@ -218,6 +218,8 @@ type ToolExecutionContext = {
   }): Promise<{ status: "confirmed"; databaseFingerprint: string }>;
   confirmScriptExecution(input: {
     databaseKey: string;
+    /** 解析后的实际 SQL，确保审批内容与执行内容一致。 */
+    sql: string;
     sourceKind: "file" | "inline";
     sourceLabel: string;
     scriptLength: number;
@@ -1052,6 +1054,7 @@ export function buildToolRegistry(): ToolDefinition[] {
 
         const confirmation = await context.confirmScriptExecution({
           databaseKey: args.databaseKey,
+          sql: scriptText,
           sourceKind,
           sourceLabel,
           scriptLength: scriptText.length,
