@@ -1,4 +1,5 @@
 import { URL } from "node:url";
+import { FULL_ACCESS_WARNING } from "../core/dangerMode.js";
 
 import type {
   DatabaseConfig,
@@ -31,6 +32,7 @@ export function summarizeDatabaseConfig(database: DatabaseConfig): Record<string
     databaseName: summarizeLogicalDatabaseName(database),
     type: database.type,
     readonly: database.readonly,
+    ...(database.dangerMode === true ? { dangerMode: true, warning: FULL_ACCESS_WARNING } : {}),
     connection: summarizeConnection(database)
   };
 }
@@ -40,7 +42,8 @@ export function summarizeDatabaseListItem(database: DatabaseConfig): Record<stri
     key: database.key,
     databaseName: summarizeLogicalDatabaseName(database),
     type: database.type,
-    readonly: database.readonly
+    readonly: database.readonly,
+    ...(database.dangerMode === true ? { dangerMode: true, warning: FULL_ACCESS_WARNING } : {})
   };
 }
 

@@ -1009,7 +1009,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "execute_statement",
-      "Execute one non-query SQL statement on a writable target. Requires interactive confirmation; no execution if confirmation is unavailable or declined.",
+      "Execute one non-query SQL statement such as INSERT, UPDATE, DELETE, MERGE, or DDL.",
       executeStatementSchema,
       async (args, context) => {
       const confirmation = await context.confirmStatementExecution({
@@ -1030,7 +1030,7 @@ export function buildToolRegistry(): ToolDefinition[] {
       }
 
       return context.useSqlDatabase(args.databaseKey, async (adapter) => {
-        if (adapter.config.readonly) {
+        if (adapter.config.readonly && adapter.config.dangerMode !== true) {
           throw new ApplicationError("NOT_SUPPORTED", `${args.databaseKey} is configured as readonly`);
         }
 
@@ -1044,7 +1044,7 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "execute_script",
-      "Execute a whole SQL script on one connection, preserving session state. Writable MySQL targets only; other adapters return NOT_SUPPORTED. Requires interactive confirmation. Scripts are not split; partial results are unavailable.",
+      "Execute a whole SQL script on one MySQL connection, preserving session state. Other adapters return NOT_SUPPORTED. Scripts are not split; partial results are unavailable.",
       executeScriptSchema,
       async (args, context) => {
         assertSqlTarget(args.databaseKey, context.getConfig());
@@ -1074,7 +1074,7 @@ export function buildToolRegistry(): ToolDefinition[] {
           );
         }
 
-        if (scriptSecurity.highRiskKeywords.includes("OUTFILE") || scriptSecurity.highRiskKeywords.includes("DUMPFILE")) {
+        if (confirmedDatabase.dangerMode !== true && (scriptSecurity.highRiskKeywords.includes("OUTFILE") || scriptSecurity.highRiskKeywords.includes("DUMPFILE"))) {
           throw new ApplicationError(
             "INVALID_ARGUMENT",
             "Script contains a write to a server-side file (INTO OUTFILE/DUMPFILE) which is not allowed through execute_script"
@@ -1082,7 +1082,7 @@ export function buildToolRegistry(): ToolDefinition[] {
         }
 
         return context.useSqlDatabase(args.databaseKey, async (adapter) => {
-          if (adapter.config.readonly) {
+          if (adapter.config.readonly && adapter.config.dangerMode !== true) {
             throw new ApplicationError("NOT_SUPPORTED", `${args.databaseKey} is configured as readonly`);
           }
 

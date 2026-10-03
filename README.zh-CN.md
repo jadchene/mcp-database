@@ -4,10 +4,10 @@
 
 MCP Database Service 是一个 TypeScript 编写的 MCP 服务，让 AI Agent 可以通过一个 MCP 服务检查和查询多个数据库目标。
 
-它支持 MySQL、PostgreSQL、openGauss、Oracle 和 Redis。SQL 目标默认只读，每次请求按需建立短连接，写入 SQL 必须经过明确确认。
+它支持 MySQL、PostgreSQL、openGauss、Oracle 和 Redis。SQL 目标默认只读，每次请求按需建立短连接，写入 SQL 默认需要明确确认，目标启用 Full Access 时跳过审批。
 
 > [!IMPORTANT]
-> 从 **v0.3.0** 开始，已移除客户端不支持 elicitation 时的两步确认 fallback。MCP 客户端不支持 elicitation 或 elicitation 请求失败时，`execute_statement` 会直接返回错误且不会执行 SQL。数据库写入请使用支持 elicitation 的 MCP 客户端。
+> 从 **v0.3.0** 开始，已移除客户端不支持 elicitation 时的两步确认 fallback。`dangerMode` 未启用时，客户端不支持 elicitation 或确认请求失败会使 `execute_statement` 返回错误且不执行 SQL。需要确认的数据库写入请使用支持 elicitation 的 MCP 客户端。
 
 ## 功能
 
@@ -82,6 +82,8 @@ MCP_DATABASE_CONFIG=./config/databases.json mcp-database-service
       "key": "main-mysql",
       "type": "mysql",
       "readonly": true,
+      "codexAutoReview": false,
+      "dangerMode": false,
       "connection": {
         "host": "127.0.0.1",
         "port": 3306,
@@ -147,8 +149,8 @@ SQL 执行与性能：
 | `execute_query` | 执行一条只读 SQL 查询。会拒绝写入和多语句 SQL。 |
 | `explain_query` | 返回只读 SQL 的静态执行计划。传原始 SQL，不要传 `EXPLAIN ...`。 |
 | `analyze_query` | 在支持的数据库上返回只读 SQL 的运行时分析。传原始 SQL，不要传 `EXPLAIN ANALYZE ...`。 |
-| `execute_statement` | 在可写目标上，经明确确认后执行一条非查询 SQL。 |
-| `execute_script` | 在一条连接上整段执行一段 SQL 脚本，可选开启事务，执行前需明确确认。 |
+| `execute_statement` | 执行一条 INSERT、UPDATE、DELETE 或 DDL 等非查询 SQL。 |
+| `execute_script` | 在一条 MySQL 连接上整段执行 SQL 脚本，可选开启事务。 |
 
 Redis：
 
@@ -165,17 +167,17 @@ Redis：
 3. 编写 join 或优化 SQL 前，先调用 `describe_table` 和 `list_indexes`。
 4. 使用 `execute_query` 执行只读 SQL。
 5. 使用 `explain_query` 或 `analyze_query` 做性能分析。
-6. 只有当目标可写且用户确认了精确变更后，才使用 `execute_statement`。
+6. 使用 `execute_statement` 执行非查询 SQL 变更。
 7. 当脚本需要在同一连接上运行、并依赖会话变量（例如 `SET @var = 1`）、存储过程或一组 DML 时，才使用 `execute_script`。
 
 ## 安全模型
 
 - 读工具和写工具分离。只读 SQL 使用 `execute_query`，非查询 SQL 使用 `execute_statement`。
 - `execute_query` 会经过只读 SQL guard，并始终在数据库只读事务中执行，即使目标配置为可写。它会拒绝写入、数据修改 CTE、`SELECT INTO`、文件输出、锁定查询、未知语句类型和多语句 SQL。
-- SQL 目标由每个 target 的 `readonly` 标志控制。当目标配置 `readonly: true` 时，`execute_statement` 会被拒绝。
+- `dangerMode` 未启用时，SQL 目标由每个 target 的 `readonly` 标志控制。当目标配置 `readonly: true` 时，`execute_statement` 会被拒绝。
 - `execute_statement` 只接受非查询 SQL。它会拒绝 `SELECT` 和其他只读 SQL，确保读写流程分离。
-- 可写 SQL 仅支持配置为 `readonly: false` 的 MySQL、Oracle、PostgreSQL 和 openGauss 目标。
-- `execute_script` 在一条连接上整段运行脚本（因此 `@var` 等会话变量保留），并需交互式确认。开启 `useTransaction` 时成功提交、失败回滚，但 `CREATE`、`ALTER`、`DROP`、`TRUNCATE`、`GRANT` 等 DDL 会隐式提交、无法回滚。它也会拦截写入服务器文件的脚本（`INTO OUTFILE`/`DUMPFILE`）。
+- 可写 SQL 仅支持配置为 `readonly: false` 或 `dangerMode: true` 的 MySQL、Oracle、PostgreSQL 和 openGauss 目标。
+- `execute_script` 在一条连接上整段运行脚本（因此 `@var` 等会话变量保留），在 `dangerMode` 未启用时需交互式确认。开启 `useTransaction` 时成功提交、失败回滚，但 `CREATE`、`ALTER`、`DROP`、`TRUNCATE`、`GRANT` 等 DDL 会隐式提交、无法回滚。在 `dangerMode` 未启用时，也会拦截写入服务器文件的脚本（`INTO OUTFILE`/`DUMPFILE`）。
 - Redis 工具是只读取向，不暴露写操作。
 - `show_loaded_config` 和发现工具只返回脱敏摘要。密码不会返回给 MCP 客户端。
 - 运行日志默认只记录 SQL 长度、指纹和参数数量，不记录 SQL 原文或参数值。
@@ -184,10 +186,18 @@ Redis：
 
 ### 写入确认
 
-- `execute_statement` 和 `execute_script` 执行前需要审批，确认内容包括实际 SQL、参数、目标和风险等级。
-- Codex 客户端会收到自动审查元数据。自动审查是可选能力：Codex 启用 `approvals_reviewer = "auto_review"` 时由其策略决定审批结果；未启用时按正常的 Accept / Decline / Cancel 操作；其他客户端使用标准确认。
+- `dangerMode` 默认 `false`。在指定数据库的 `databases[]` 配置块设置 `"dangerMode": true` 启用 Full Access，优先于 `codexAutoReview`。所有适用于该数据库类型的工具无需人工或自动操作审批，覆盖 `readonly` 并允许脚本写入服务器文件；参数校验、工具的 SQL 语义和数据库账号权限仍然有效。其他数据库配置独立生效。读取、成功和失败的返回 JSON 均附带 `warning` 字段，发现及配置摘要也会在启用目标的条目中显示警告。
+
+警告文案：
+
+```text
+FULL ACCESS: Danger mode is enabled for this target. All available tools can execute without operation approval. Calls may modify or delete data immediately. Use caution.
+```
+
+- `dangerMode` 未启用时，`execute_statement` 和 `execute_script` 执行前需要审批，确认内容包括实际 SQL、参数、目标和风险等级。
+- Codex 自动审批扩展默认禁用；在指定数据库的 `databases[]` 配置块中显式设置 `"codexAutoReview": true` 才会为 Codex 客户端添加审批元数据。Codex 开启 `approvals_reviewer = "auto_review"` 时自动审查，否则使用正常的 Accept / Decline / Cancel 确认；审批结果仍由 Codex 策略决定。
 - 接受后执行；拒绝或取消均不执行。
-- 客户端不支持 elicitation 或 elicitation 请求失败时，服务会直接返回错误且不会执行 SQL。
+- 需要确认的操作在客户端不支持 elicitation 或确认请求失败时，会返回错误且不会执行 SQL。
 
 ## 配置刷新
 
@@ -209,6 +219,8 @@ Thick 模式需要 Oracle Instant Client：
   "key": "oracle-thick-example",
   "type": "oracle",
   "readonly": true,
+  "codexAutoReview": false,
+  "dangerMode": false,
   "connection": {
     "host": "127.0.0.1",
     "port": 1521,
@@ -231,7 +243,7 @@ Oracle 不支持 `analyze_query`，会返回 `NOT_SUPPORTED`。
 
 - Skill 路径：`skills/database-mcp/SKILL.md`
 
-当你的 Agent 支持 skills 时建议加载它。它会统一数据库发现、结果大小控制、先读后写默认行为和写入确认纪律。
+当你的 Agent 支持 skills 时建议加载它。它会统一数据库发现、结果大小控制、先读后写默认行为和工具选择。
 
 ## MCP 客户端配置
 

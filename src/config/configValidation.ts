@@ -4,6 +4,8 @@ import { ApplicationError } from "../core/errors.js";
 import type { DatabaseConfig, RootConfig } from "./configTypes.js";
 
 const readonlySchema = z.boolean();
+const codexAutoReviewSchema = z.boolean().default(false);
+const dangerModeSchema = z.boolean().default(false);
 const keySchema = z.string().min(1);
 const portSchema = z.number().int().min(1).max(65_535).optional();
 const timeoutSchema = z.number().int().min(1).max(2_147_483_647).optional();
@@ -12,6 +14,8 @@ const mysqlSchema = z.object({
   key: keySchema,
   type: z.literal("mysql"),
   readonly: readonlySchema,
+  codexAutoReview: codexAutoReviewSchema,
+  dangerMode: dangerModeSchema,
   connection: z.object({
     host: z.string().min(1),
     port: portSchema,
@@ -27,6 +31,8 @@ const oracleSchema = z.object({
   key: keySchema,
   type: z.literal("oracle"),
   readonly: readonlySchema,
+  codexAutoReview: codexAutoReviewSchema,
+  dangerMode: dangerModeSchema,
   connection: z
     .object({
       host: z.string().min(1),
@@ -70,6 +76,8 @@ const postgresSchema = z.object({
   key: keySchema,
   type: z.literal("postgresql"),
   readonly: readonlySchema,
+  codexAutoReview: codexAutoReviewSchema,
+  dangerMode: dangerModeSchema,
   connection: postgresConnectionSchema
 }).strict();
 
@@ -77,6 +85,8 @@ const openGaussSchema = z.object({
   key: keySchema,
   type: z.literal("opengauss"),
   readonly: readonlySchema,
+  codexAutoReview: codexAutoReviewSchema,
+  dangerMode: dangerModeSchema,
   connection: postgresConnectionSchema
 }).strict();
 
@@ -84,6 +94,8 @@ const redisSchema = z.object({
   key: keySchema,
   type: z.literal("redis"),
   readonly: readonlySchema,
+  codexAutoReview: codexAutoReviewSchema,
+  dangerMode: dangerModeSchema,
   connection: z
     .object({
       url: z.string().min(1).optional(),

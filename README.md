@@ -4,10 +4,10 @@ English | [简体中文](./README.zh-CN.md)
 
 MCP Database Service is a TypeScript MCP server that lets AI agents inspect and query multiple database targets through one MCP service.
 
-It supports MySQL, PostgreSQL, openGauss, Oracle, and Redis. SQL targets are read-only by default, connections are opened lazily for each request, and writable SQL requires explicit confirmation.
+It supports MySQL, PostgreSQL, openGauss, Oracle, and Redis. SQL targets are read-only by default, connections are opened lazily for each request, and writable SQL requires explicit confirmation unless Full Access is enabled for the target.
 
 > [!IMPORTANT]
-> Starting with **v0.3.0**, the non-elicitation two-step confirmation fallback has been removed. `execute_statement` now returns an error without executing when the MCP client does not support elicitation or when the elicitation request fails. Use an MCP client with elicitation support for database writes.
+> Starting with **v0.3.0**, the non-elicitation two-step confirmation fallback has been removed. Outside `dangerMode`, `execute_statement` returns an error without executing when the MCP client does not support elicitation or when the elicitation request fails. Use an MCP client with elicitation support for database writes.
 
 ## Features
 
@@ -82,6 +82,8 @@ Minimal SQL target example:
       "key": "main-mysql",
       "type": "mysql",
       "readonly": true,
+      "codexAutoReview": false,
+      "dangerMode": false,
       "connection": {
         "host": "127.0.0.1",
         "port": 3306,
@@ -147,8 +149,8 @@ SQL execution and performance:
 | `execute_query` | Run one read-only SQL query. It rejects writes and multi-statement SQL. |
 | `explain_query` | Return the static execution plan for a read-only SQL query. Pass the original SQL, not `EXPLAIN ...`. |
 | `analyze_query` | Return runtime analysis for a read-only SQL query where supported. Pass the original SQL, not `EXPLAIN ANALYZE ...`. |
-| `execute_statement` | Run one non-query SQL statement on a writable target after explicit confirmation. |
-| `execute_script` | Run one whole SQL script on a single connection, optionally inside a transaction, after explicit confirmation. |
+| `execute_statement` | Run one non-query SQL statement such as INSERT, UPDATE, DELETE, or DDL. |
+| `execute_script` | Run one whole MySQL script on a single connection, optionally inside a transaction. |
 
 Redis:
 
@@ -165,17 +167,17 @@ Redis:
 3. Call `describe_table` and `list_indexes` before writing joins or optimization SQL.
 4. Use `execute_query` for read-only SQL.
 5. Use `explain_query` or `analyze_query` for performance work.
-6. Use `execute_statement` only when the target is writable and the user has approved the exact change.
+6. Use `execute_statement` for non-query SQL changes.
 7. Use `execute_script` when a script must run on one connection and relies on session variables (for example `SET @var = 1`), stored procedures, or a series of DML.
 
 ## Safety Model
 
 - Read tools are separated from write tools. Use `execute_query` for read-only SQL and `execute_statement` for non-query SQL.
 - `execute_query` runs through a read-only SQL guard and always executes in a database read-only transaction, even for writable targets. It rejects writes, data-modifying CTEs, `SELECT INTO`, file output, locking queries, unsupported statement types, and multi-statement SQL.
-- SQL targets are controlled by the per-target `readonly` flag. `execute_statement` is rejected when the selected target has `readonly: true`.
+- Outside `dangerMode`, SQL targets are controlled by the per-target `readonly` flag. `execute_statement` is rejected when the selected target has `readonly: true`.
 - `execute_statement` accepts non-query SQL only. It rejects `SELECT` and other read-only SQL so read and write workflows stay separate.
-- Writable SQL is supported only for MySQL, Oracle, PostgreSQL, and openGauss targets configured with `readonly: false`.
-- `execute_script` runs a whole script on one connection (so session variables such as `@var` are preserved) and requires interactive confirmation. With `useTransaction: true` it commits on success and rolls back on failure, but DDL such as `CREATE`/`ALTER`/`DROP`/`TRUNCATE`/`GRANT` causes an implicit commit and cannot be rolled back. It also blocks scripts that write to a server-side file (`INTO OUTFILE`/`DUMPFILE`).
+- Writable SQL is supported only for MySQL, Oracle, PostgreSQL, and openGauss targets configured with `readonly: false` or `dangerMode: true`.
+- `execute_script` runs a whole script on one connection (so session variables such as `@var` are preserved) and requires interactive confirmation unless `dangerMode` is enabled. With `useTransaction: true` it commits on success and rolls back on failure, but DDL such as `CREATE`/`ALTER`/`DROP`/`TRUNCATE`/`GRANT` causes an implicit commit and cannot be rolled back. Outside `dangerMode`, it also blocks scripts that write to a server-side file (`INTO OUTFILE`/`DUMPFILE`).
 - Redis tools are read-oriented and do not expose write operations.
 - `show_loaded_config` and discovery tools return sanitized summaries. Passwords are never returned to the MCP client.
 - Runtime logs store only SQL length, a fingerprint, and parameter count; SQL text and parameter values are not logged.
@@ -184,10 +186,18 @@ Redis:
 
 ### Write Confirmation
 
-- `execute_statement` and `execute_script` require approval before execution. Confirmation shows the actual SQL, parameters, target, and risk level.
-- Codex clients receive metadata requesting automatic review. Automatic review is optional: when `approvals_reviewer = "auto_review"` is enabled in Codex, Codex policy decides approval; otherwise, use the normal Accept / Decline / Cancel confirmation. Other clients use standard confirmation.
+- `dangerMode` defaults to `false`. Set `"dangerMode": true` in the selected `databases[]` block for Full Access. It takes precedence over `codexAutoReview`: all tools supported by the database type execute without manual or automatic operation approval, overriding `readonly` and allowing server-side file writes through scripts. Input validation, tool SQL semantics, and database account permissions still apply. Other databases remain independent. Read, success, and failure JSON responses include `warning`; discovery and config summaries also warn on enabled target entries.
+
+Warning text:
+
+```text
+FULL ACCESS: Danger mode is enabled for this target. All available tools can execute without operation approval. Calls may modify or delete data immediately. Use caution.
+```
+
+- Outside `dangerMode`, `execute_statement` and `execute_script` require approval before execution. Confirmation shows the actual SQL, parameters, target, and risk level.
+- Codex automatic-review integration is disabled by default. Set `"codexAutoReview": true` in the selected `databases[]` block to enable approval metadata for Codex clients. Codex uses automatic review when `approvals_reviewer = "auto_review"` is enabled; otherwise, use normal Accept / Decline / Cancel confirmation. Approval remains subject to Codex policy.
 - Accept executes the operation; decline or cancel leaves it unexecuted.
-- When elicitation is unavailable or fails, the server returns an explicit error and does not execute the SQL.
+- Outside `dangerMode`, when elicitation is unavailable or fails, the server returns an explicit error and does not execute the SQL.
 
 ## Config Reload
 
@@ -209,6 +219,8 @@ Thick mode requires Oracle Instant Client:
   "key": "oracle-thick-example",
   "type": "oracle",
   "readonly": true,
+  "codexAutoReview": false,
+  "dangerMode": false,
   "connection": {
     "host": "127.0.0.1",
     "port": 1521,
@@ -231,7 +243,7 @@ This repository includes an agent skill for safer database workflows:
 
 - Skill path: `skills/database-mcp/SKILL.md`
 
-Use it when your agent supports skills. It standardizes database discovery, result-size discipline, read-first defaults, and write confirmation behavior.
+Use it when your agent supports skills. It standardizes database discovery, result-size discipline, read-first defaults, and tool selection.
 
 ## MCP Client Configuration
 

@@ -31,6 +31,51 @@ test("config validation accepts a valid mysql entry", () => {
   assert.equal(result.query.timeoutMs, 5000);
   assert.equal(result.databases.length, 1);
   assert.equal(result.databases[0]?.key, "main-mysql");
+  assert.equal(result.databases[0]?.codexAutoReview, false);
+});
+
+test("Codex auto review requires per-database boolean opt-in for every database type", () => {
+  const targets = [
+    { type: "mysql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
+    { type: "postgresql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
+    { type: "opengauss", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
+    { type: "oracle", connection: { host: "localhost", serviceName: "db", user: "test", password: "" } },
+    { type: "redis", connection: { host: "localhost" } }
+  ];
+  for (const target of targets) {
+    const config = validateDatabaseConfig({ databases: [
+      { ...target, key: "enabled", readonly: false, codexAutoReview: true },
+      { ...target, key: "disabled", readonly: false, codexAutoReview: false },
+      { ...target, key: "default", readonly: false }
+    ] });
+    assert.deepEqual(config.databases.map(item => item.codexAutoReview), [true, false, false]);
+    for (const codexAutoReview of ["true", 1, null]) {
+      assert.throws(() => validateDatabaseConfig({ databases: [{ ...target, key: "invalid", readonly: false, codexAutoReview }] }),
+        (error: unknown) => error instanceof ApplicationError && error.code === "CONFIG_ERROR");
+    }
+  }
+});
+
+test("danger mode defaults to false and requires per-target boolean opt-in for every database type", () => {
+  const targets = [
+    { type: "mysql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
+    { type: "postgresql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
+    { type: "opengauss", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
+    { type: "oracle", connection: { host: "localhost", serviceName: "db", user: "test", password: "" } },
+    { type: "redis", connection: { host: "localhost" } }
+  ];
+  for (const target of targets) {
+    const config = validateDatabaseConfig({ databases: [
+      { ...target, key: "enabled", readonly: true, dangerMode: true },
+      { ...target, key: "disabled", readonly: true, dangerMode: false },
+      { ...target, key: "default", readonly: true }
+    ] });
+    assert.deepEqual(config.databases.map(item => item.dangerMode), [true, false, false]);
+    for (const dangerMode of ["true", 1, null]) {
+      assert.throws(() => validateDatabaseConfig({ databases: [{ ...target, key: "invalid", readonly: true, dangerMode }] }),
+        (error: unknown) => error instanceof ApplicationError && error.code === "CONFIG_ERROR");
+    }
+  }
 });
 
 test("config validation rejects duplicate names", () => {

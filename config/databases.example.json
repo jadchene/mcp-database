@@ -18,7 +18,9 @@
         "user": "app_reader",
         "password": "replace-with-password",
         "connectTimeoutMs": 5000
-      }
+      },
+      "dangerMode": false,
+      "codexAutoReview": false
     },
     {
       "key": "cache-redis",
@@ -27,7 +29,9 @@
       "connection": {
         "url": "redis://127.0.0.1:6379/0",
         "connectTimeoutMs": 5000
-      }
+      },
+      "dangerMode": false,
+      "codexAutoReview": false
     },
     {
       "key": "oracle-thick-example",
@@ -42,7 +46,9 @@
         "connectTimeoutMs": 5000,
         "clientMode": "thick",
         "clientLibDir": "C:\\oracle\\instantclient_19_25"
-      }
+      },
+      "dangerMode": false,
+      "codexAutoReview": false
     }
   ]
 }

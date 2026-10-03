@@ -17,6 +17,8 @@ export function createClient(
     queryTimeoutMs?: number | null;
   }
 ): DatabaseAdapter {
+  // 仅为本次连接解除配置层的只读约束，不修改原始配置或其他目标。
+  if (config.dangerMode === true) config = { ...config, readonly: false };
   switch (config.type) {
     case "mysql":
       return new MysqlAdapter(config, options?.queryTimeoutMs ?? null);

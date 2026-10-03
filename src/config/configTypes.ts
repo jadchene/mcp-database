@@ -4,6 +4,10 @@ export interface BaseDatabaseConfig {
   key: string;
   type: DatabaseType;
   readonly: boolean;
+  /** 显式启用本数据库的 Codex 自动审批扩展，默认禁用。 */
+  codexAutoReview?: boolean;
+  /** 本数据库的 Full Access 模式，跳过操作审批与只读限制，默认禁用。 */
+  dangerMode?: boolean;
 }
 
 export interface MysqlDatabaseConfig extends BaseDatabaseConfig {

@@ -3,6 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { fingerprintDatabaseTarget } from "../config/databaseFingerprint.js";
+import { FULL_ACCESS_WARNING } from "../core/dangerMode.js";
 import { summarizeLoadedConfig } from "../config/configSummary.js";
 import { loadConfigFromPath } from "../config/loadConfig.js";
 import { inspectSqlStatement } from "../db/readonlyGuard.js";
@@ -204,12 +205,16 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const args = request.params.arguments ?? {};
+    const target = typeof args.databaseKey === "string" ? currentConfig.databaseMap.get(args.databaseKey) : undefined;
+    // 记录本次调用实际使用过的权限配置，避免异步读取或热更新后漏报 Full Access。
+    let fullAccess = target?.dangerMode === true;
     const tool = toolsByName.get(request.params.name);
-    if (!tool) {
-      throw new ApplicationError("INVALID_ARGUMENT", `Unknown tool: ${request.params.name}`);
-    }
 
     try {
+      if (!tool) {
+        throw new ApplicationError("INVALID_ARGUMENT", `Unknown tool: ${request.params.name}`);
+      }
       log("info", "Tool execution started", {
         toolName: tool.name,
         arguments: summarizeToolArguments(request.params.arguments ?? {})
@@ -223,12 +228,16 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
           return reloadConfigSnapshot("manual");
         },
         useSqlDatabase(databaseKey, action) {
-          return withDatabaseAdapter(currentConfig, databaseKey, "sql", async (adapter) =>
+          const snapshot = currentConfig;
+          fullAccess ||= snapshot.databaseMap.get(databaseKey)?.dangerMode === true;
+          return withDatabaseAdapter(snapshot, databaseKey, "sql", async (adapter) =>
             action(adapter as SqlDatabaseAdapter)
           );
         },
         useRedisDatabase(databaseKey, action) {
-          return withDatabaseAdapter(currentConfig, databaseKey, "redis", async (adapter) =>
+          const snapshot = currentConfig;
+          fullAccess ||= snapshot.databaseMap.get(databaseKey)?.dangerMode === true;
+          return withDatabaseAdapter(snapshot, databaseKey, "redis", async (adapter) =>
             action(adapter as RedisDatabaseAdapter)
           );
         },
@@ -237,6 +246,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
           if (!database) {
             throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${input.databaseKey}`);
           }
+          fullAccess ||= database.dangerMode === true;
 
           const clientCapabilities = server.getClientCapabilities();
           return confirmStatementExecution({
@@ -251,10 +261,11 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                   type: "object",
                   properties: {}
                 },
-                _meta: buildCodexApprovalMeta(
-                  server.getClientVersion(), tool.name, request.params.arguments ?? {}, message,
+                _meta: database.codexAutoReview === true ? buildCodexApprovalMeta(
+                  request.params._meta?.["io.modelcontextprotocol/clientInfo"] ?? server.getClientVersion(),
+                  tool.name, request.params.arguments ?? {}, message,
                   inspectSqlStatement(input.sql).riskLevel !== "normal"
-                )
+                ) : undefined
               });
 
               log("info", "Write statement waiting for interactive confirmation", {
@@ -276,6 +287,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
           if (!database) {
             throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${input.databaseKey}`);
           }
+          fullAccess ||= database.dangerMode === true;
 
           const clientCapabilities = server.getClientCapabilities();
           return confirmScriptExecution({
@@ -290,11 +302,11 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                   type: "object",
                   properties: {}
                 },
-                _meta: buildCodexApprovalMeta(
-                  server.getClientVersion(), tool.name,
+                _meta: database.codexAutoReview === true ? buildCodexApprovalMeta(
+                  request.params._meta?.["io.modelcontextprotocol/clientInfo"] ?? server.getClientVersion(), tool.name,
                   { ...request.params.arguments, resolvedSql: input.sql }, message,
                   input.ddlKeywords.length > 0 || input.highRiskKeywords.length > 0
-                )
+                ) : undefined
               });
 
               log("info", "Script execution waiting for interactive confirmation", {
@@ -322,14 +334,14 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result)
+            text: JSON.stringify(fullAccess ? { ...(result as Record<string, unknown>), warning: FULL_ACCESS_WARNING } : result)
           }
         ]
       };
     } catch (error) {
       const wrapped = toApplicationError(error, "QUERY_ERROR");
       log("error", "Tool execution failed", {
-        toolName: tool.name,
+        toolName: request.params.name,
         code: wrapped.code,
         errorMessage: wrapped.message,
         details: wrapped.details
@@ -342,6 +354,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
             type: "text",
             text: JSON.stringify(
               {
+                ...(fullAccess ? { warning: FULL_ACCESS_WARNING } : {}),
                 error: {
                   code: wrapped.code,
                   message: wrapped.message,
@@ -455,7 +468,7 @@ export async function confirmStatementExecution(
     throw new ApplicationError("NOT_SUPPORTED", "Redis does not support SQL statement execution");
   }
 
-  if (database.readonly) {
+  if (database.readonly && database.dangerMode !== true) {
     throw new ApplicationError("NOT_SUPPORTED", `${input.databaseKey} is configured as readonly`);
   }
 
@@ -465,6 +478,11 @@ export async function confirmStatementExecution(
   }
 
   const databaseFingerprint = fingerprintDatabaseTarget(database);
+
+  // Full Access 仍绑定准确的目标配置，但不请求人工或自动审批。
+  if (database.dangerMode === true) {
+    return { status: "confirmed", databaseFingerprint };
+  }
 
   if (!supportsInteractiveConfirmation || !elicitConfirmation) {
     throw new ApplicationError(
@@ -547,11 +565,16 @@ export async function confirmScriptExecution(
     );
   }
 
-  if (database.readonly) {
+  if (database.readonly && database.dangerMode !== true) {
     throw new ApplicationError("NOT_SUPPORTED", `${input.databaseKey} is configured as readonly`);
   }
 
   const databaseFingerprint = fingerprintDatabaseTarget(database);
+
+  // Full Access 优先于 Codex 自动审批与客户端 elicitation 能力。
+  if (database.dangerMode === true) {
+    return { status: "confirmed", databaseFingerprint };
+  }
 
   if (!supportsInteractiveConfirmation || !elicitConfirmation) {
     throw new ApplicationError(
