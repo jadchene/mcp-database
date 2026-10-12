@@ -11,19 +11,23 @@ import { inspectSqlStatement } from "../db/readonlyGuard.js";
 import type { LoadedConfig } from "../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../core/errors.js";
 import { log } from "../core/logger.js";
-import { createClient } from "../db/clientFactory.js";
+import { SessionPool } from "./sessions.js";
+import { compactErrorDetails, compactToolResult } from "./toolResult.js";
 import type { RedisDatabaseAdapter, SqlDatabaseAdapter } from "../db/types.js";
 import { buildToolRegistry } from "./toolRegistry.js";
 import { SERVICE_NAME, SERVICE_VERSION } from "../version.js";
 import { buildCodexApprovalMeta } from "./codexApproval.js";
 
 interface StatementConfirmationInput {
+  sessionId?: string;
+  sessionStateVersion?: number;
   databaseKey: string;
   sql: string;
   params?: unknown[];
 }
 
 interface ScriptConfirmationInput {
+  sessionId?: string;
   databaseKey: string;
   /** 文件或内联来源解析后的实际 SQL，用于自动审批。 */
   sql: string;
@@ -51,59 +55,13 @@ interface ScriptConfirmationContext {
 
 type StatementConfirmationResult = { status: "confirmed"; databaseFingerprint: string };
 
-async function withDatabaseAdapter<T>(
-  config: LoadedConfig,
-  databaseKey: string,
-  expectedType: "sql" | "redis",
-  action: (adapter: SqlDatabaseAdapter | RedisDatabaseAdapter) => Promise<T>
-): Promise<T> {
-  const database = config.databaseMap.get(databaseKey);
-  if (!database) {
-    throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${databaseKey}`);
-  }
-
-  const isRedis = database.type === "redis";
-  if (expectedType === "sql" && isRedis) {
-    throw new ApplicationError("NOT_SUPPORTED", `${databaseKey} is a Redis target and does not support SQL tools`);
-  }
-
-  if (expectedType === "redis" && !isRedis) {
-    throw new ApplicationError("NOT_SUPPORTED", `${databaseKey} is not a Redis target`);
-  }
-
-  const adapter = createClient(database, {
-    queryTimeoutMs: config.query.timeoutMs
-  });
-  const startedAt = Date.now();
-
-  try {
-    await adapter.connect();
-    return await action(adapter as SqlDatabaseAdapter & RedisDatabaseAdapter);
-  } finally {
-    await adapter.close().catch((error) => {
-      const wrapped = toApplicationError(error, "CONNECTION_ERROR");
-      log("warn", "Failed to close database connection", {
-        databaseKey,
-        type: database.type,
-        code: wrapped.code,
-        errorMessage: wrapped.message
-      });
-    });
-
-    log("info", "Database operation completed", {
-      databaseKey,
-      type: database.type,
-      durationMs: Date.now() - startedAt
-    });
-  }
-}
-
 /**
  * The MCP layer is intentionally thin: validate input, route to the correct
  * adapter, and return normalized JSON text for clients.
  */
 export async function createServer(config: LoadedConfig): Promise<Server> {
   let currentConfig = config;
+  const sessions = new SessionPool(() => currentConfig);
   let reloadInFlight: Promise<LoadedConfig> | null = null;
   let pendingWatchReloadTimer: NodeJS.Timeout | null = null;
   let watcherDisposed = false;
@@ -116,6 +74,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     reloadInFlight = loadConfigFromPath(previousConfig.configPath)
       .then((reloadedConfig) => {
         currentConfig = reloadedConfig;
+        sessions.reconcile();
         log("info", reason === "manual" ? "Database configuration reloaded" : "Database configuration auto-reloaded", {
           reason,
           previousConfigPath: previousConfig.configPath,
@@ -155,6 +114,7 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     }
 
     unwatchFile(currentConfig.configPath);
+    process.removeListener("exit", disposeWatcher);
     watcherDisposed = true;
   };
 
@@ -212,6 +172,9 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     const tool = toolsByName.get(request.params.name);
 
     try {
+      if (typeof args.sessionId === "string") {
+        try { fullAccess ||= sessions.getDatabase(args.sessionId).dangerMode === true; } catch { /* 工具校验统一返回具体错误。 */ }
+      }
       if (!tool) {
         throw new ApplicationError("INVALID_ARGUMENT", `Unknown tool: ${request.params.name}`);
       }
@@ -227,31 +190,30 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
         async reloadConfig() {
           return reloadConfigSnapshot("manual");
         },
-        useSqlDatabase(databaseKey, action) {
-          const snapshot = currentConfig;
-          fullAccess ||= snapshot.databaseMap.get(databaseKey)?.dangerMode === true;
-          return withDatabaseAdapter(snapshot, databaseKey, "sql", async (adapter) =>
-            action(adapter as SqlDatabaseAdapter)
-          );
+        connect: (databaseKey) => sessions.connect(databaseKey),
+        disconnect: (sessionId) => sessions.disconnect(sessionId),
+        getDatabase: (sessionId) => sessions.getDatabase(sessionId),
+        getTransactionStatus: (sessionId) => sessions.use(sessionId, "any", async () => ({}), false, false),
+        useSqlDatabase(sessionId, action) {
+          fullAccess ||= sessions.getDatabase(sessionId).dangerMode === true;
+          return sessions.use(sessionId, "sql", adapter => action(adapter as SqlDatabaseAdapter), ["execute_statement", "execute_script", "commit_transaction"].includes(tool.name));
         },
-        useRedisDatabase(databaseKey, action) {
-          const snapshot = currentConfig;
-          fullAccess ||= snapshot.databaseMap.get(databaseKey)?.dangerMode === true;
-          return withDatabaseAdapter(snapshot, databaseKey, "redis", async (adapter) =>
-            action(adapter as RedisDatabaseAdapter)
-          );
+        useRedisDatabase(sessionId, action) {
+          fullAccess ||= sessions.getDatabase(sessionId).dangerMode === true;
+          return sessions.use(sessionId, "redis", adapter => action(adapter as RedisDatabaseAdapter));
         },
         async confirmStatementExecution(input) {
-          const database = currentConfig.databaseMap.get(input.databaseKey);
+          const token = sessions.approvalToken(input.sessionId);
+          const database = sessions.getDatabase(input.sessionId);
           if (!database) {
             throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${input.databaseKey}`);
           }
           fullAccess ||= database.dangerMode === true;
 
           const clientCapabilities = server.getClientCapabilities();
-          return confirmStatementExecution({
+          const confirmation = await confirmStatementExecution({
             database,
-            input,
+            input: { ...input, sessionStateVersion: token.version },
             supportsInteractiveConfirmation: Boolean(clientCapabilities?.elicitation),
             elicitConfirmation: async (message) => {
               const confirmation = await server.elicitInput({
@@ -281,16 +243,19 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 : "no";
             }
           });
+          sessions.validateApproval(token);
+          return confirmation;
         },
         async confirmScriptExecution(input) {
-          const database = currentConfig.databaseMap.get(input.databaseKey);
+          const token = sessions.approvalToken(input.sessionId);
+          const database = sessions.getDatabase(input.sessionId);
           if (!database) {
             throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${input.databaseKey}`);
           }
           fullAccess ||= database.dangerMode === true;
 
           const clientCapabilities = server.getClientCapabilities();
-          return confirmScriptExecution({
+          const confirmation = await confirmScriptExecution({
             database,
             input,
             supportsInteractiveConfirmation: Boolean(clientCapabilities?.elicitation),
@@ -322,6 +287,8 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
                 : "no";
             }
           });
+          sessions.validateApproval(token);
+          return confirmation;
         }
       });
 
@@ -331,12 +298,11 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
       });
 
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(fullAccess ? { ...(result as Record<string, unknown>), warning: FULL_ACCESS_WARNING } : result)
-          }
-        ]
+        content: [],
+        structuredContent: {
+          ...compactToolResult(tool.name, result),
+          ...(fullAccess ? { warning: FULL_ACCESS_WARNING } : {})
+        }
       };
     } catch (error) {
       const wrapped = toApplicationError(error, "QUERY_ERROR");
@@ -349,29 +315,22 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
 
       return {
         isError: true,
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                ...(fullAccess ? { warning: FULL_ACCESS_WARNING } : {}),
-                error: {
-                  code: wrapped.code,
-                  message: wrapped.message,
-                  details: wrapped.details ?? {}
-                }
-              },
-              null,
-              2
-            )
+        content: [],
+        structuredContent: {
+          ...(fullAccess ? { warning: FULL_ACCESS_WARNING } : {}),
+          error: {
+            code: wrapped.code,
+            message: wrapped.message,
+            ...(compactErrorDetails(wrapped.details) ? { details: compactErrorDetails(wrapped.details) } : {})
           }
-        ]
+        }
       };
     }
   });
 
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  try { await server.connect(transport); }
+  catch (error) { disposeWatcher(); await sessions.close(); throw error; }
 
   let shutdownInFlight: Promise<void> | null = null;
   const shutdown = (): Promise<void> => {
@@ -380,10 +339,19 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     }
     shutdownInFlight = (async () => {
       disposeWatcher();
+      await sessions.close();
       await server.close();
     })();
     return shutdownInFlight;
   };
+  const dispose = (): void => {
+    disposeWatcher();
+    process.removeListener("SIGINT", handleSignal);
+    process.removeListener("SIGTERM", handleSignal);
+  };
+  server.onclose = () => { dispose(); void sessions.close(); };
+  const originalClose = server.close.bind(server);
+  server.close = async () => { dispose(); await sessions.close(); await originalClose(); };
   const handleSignal = (): void => {
     void shutdown()
       .then(() => process.exit(0))
@@ -444,6 +412,8 @@ function buildInteractiveConfirmationMessage(input: StatementConfirmationInput):
   return (
     `Review this database write operation before execution.\n\n` +
     `Database Key: ${input.databaseKey}\n` +
+    (input.sessionId ? `Session ID: ${input.sessionId}\n` : "") +
+    (input.sessionStateVersion !== undefined ? `Session State Version: ${input.sessionStateVersion}\n` : "") +
     `Statement: ${statement.firstKeyword}\n` +
     `Target: ${targetObject}\n` +
     `Risk Level: ${statement.riskLevel.toUpperCase()}\n` +

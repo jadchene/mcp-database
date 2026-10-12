@@ -8,7 +8,7 @@ import { PostgresAdapter } from "../db/sql/postgresClient.js";
 const mysqlHost = process.env.TEST_MYSQL_HOST;
 const postgresHost = process.env.TEST_POSTGRES_HOST;
 
-test("MySQL adapter enforces read transactions and driver-side row limits", {
+test("MySQL adapter retains its connection after driver-side row limits", {
   skip: !mysqlHost,
   timeout: 20_000
 }, async () => {
@@ -37,12 +37,16 @@ test("MySQL adapter enforces read transactions and driver-side row limits", {
     assert.equal(result.rowCount, 2);
     assert.equal(result.truncated, true);
     assert.deepEqual(result.rows.map((row) => row.id), [1, 2]);
+    assert.equal(adapter.isConnected(), true);
+    assert.equal((await adapter.getTransactionStatus()).state, "none");
+    await adapter.executeStatement("SET @mcp_integration_value = 123");
+    assert.equal((await adapter.executeQuery("SELECT @mcp_integration_value AS value", [], 1)).rows[0]?.value, 123);
   } finally {
     await adapter.close();
   }
 });
 
-test("PostgreSQL adapter enforces read transactions and cursor row limits", {
+test("PostgreSQL adapter preserves caller transactions and cursor row limits", {
   skip: !postgresHost,
   timeout: 20_000
 }, async () => {
@@ -67,6 +71,11 @@ test("PostgreSQL adapter enforces read transactions and cursor row limits", {
     assert.equal(result.rowCount, 2);
     assert.equal(result.truncated, true);
     assert.deepEqual(result.rows.map((row) => row.id), [1, 2]);
+    await adapter.executeStatement("BEGIN");
+    assert.equal((await adapter.getTransactionStatus()).state, "active");
+    await adapter.executeQuery("SELECT 1 AS id", [], 1);
+    assert.equal((await adapter.getTransactionStatus()).state, "active");
+    await adapter.rollbackTransaction();
   } finally {
     await adapter.close();
   }

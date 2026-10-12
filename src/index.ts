@@ -14,8 +14,7 @@ function printVersion(): void {
 }
 
 /**
- * Main entrypoint: load validated config, start the MCP server, and leave all
- * actual database work to per-request lazy adapters.
+ * 加载配置并启动显式会话服务，仅 connect 工具建立数据库连接。
  */
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -27,7 +26,7 @@ async function main(): Promise<void> {
   const config = await loadConfig(argv, process.env);
   await createServer(config);
   log("info", "MCP database server started", {
-    databaseCount: config.databases.length
+    databaseCount: config.databases.filter(database => database.enable !== false).length
   });
 }
 

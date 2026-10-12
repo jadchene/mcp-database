@@ -2,317 +2,123 @@
 
 # MCP Database Service
 
-MCP Database Service 是一个 TypeScript 编写的 MCP 服务，让 AI Agent 可以通过一个 MCP 服务检查和查询多个数据库目标。
+支持 MySQL、PostgreSQL、Oracle 和 Redis 的 MCP 服务，提供显式持久连接与跨调用 SQL 状态连续性。
 
-它支持 MySQL、PostgreSQL、openGauss、Oracle 和 Redis。SQL 目标默认只读，每次请求按需建立短连接，写入 SQL 默认需要明确确认，目标启用 Full Access 时跳过审批。
-
-> [!IMPORTANT]
-> 从 **v0.3.0** 开始，已移除客户端不支持 elicitation 时的两步确认 fallback。`dangerMode` 未启用时，客户端不支持 elicitation 或确认请求失败会使 `execute_statement` 返回错误且不执行 SQL。需要确认的数据库写入请使用支持 elicitation 的 MCP 客户端。
-
-## 功能
-
-- 在一个 JSON 配置文件中管理多个命名数据库目标。
-- 支持 MySQL、PostgreSQL、openGauss、Oracle 和 Redis。
-- 只读查询工具会拒绝带写入或锁副作用的 SQL，并在数据库只读事务中执行。
-- 提供 schema、表、列、索引、变量、锁和会话等元数据工具。
-- 通过 `explain_query` 查看静态执行计划。
-- 在支持的数据库上通过 `analyze_query` 查看运行时分析。
-- 仅在显式配置为可写的目标上，通过 `execute_statement` 执行受控非查询 SQL。
-- 支持手动和自动配置刷新，刷新失败时保留上一份有效配置。
-- 支持可选文件日志，路径按配置文件位置解析。
-- 每次请求使用短连接并在请求结束后清理。
-
-## 为什么使用它
-
-- 给 Agent 提供数据库可见性，不需要把凭据或临时 SQL 脚本散落在提示词里。
-- 默认保持数据库操作只读，同时在目标显式允许时支持受控写入。
-- 对不同 SQL 数据库使用一致的发现和查询流程。
-- 在修改 SQL 或索引前先检查执行计划、锁和会话信息。
-
-## 快速开始
-
-从 npm 安装：
+## 安装
 
 ```powershell
 npm install -g @jadchene/mcp-database-service
-mcp-database-service --config ./config/databases.example.json
-```
-
-从源码运行：
-
-```bash
-npm install
-npm run build
-node dist/index.js --config ./config/databases.example.json
-```
-
-发布后的 CLI 命令是：
-
-```text
-mcp-database-service
-```
-
-## 配置
-
-通过 CLI 参数指定配置文件：
-
-```bash
 mcp-database-service --config ./config/databases.json
 ```
 
-或通过环境变量指定：
+也可通过 MCP_DATABASE_CONFIG 指定配置文件。
 
-```bash
-MCP_DATABASE_CONFIG=./config/databases.json mcp-database-service
-```
-
-最小 SQL 目标示例：
+## 配置
 
 ```json
 {
-  "logging": {
-    "enabled": true,
-    "directory": "./logs"
-  },
+  "sessionIdleTimeoutMs": 1800000,
+  "maxSessions": 32,
   "query": {
     "timeoutMs": 5000
+  },
+  "logging": {
+    "enabled": false
   },
   "databases": [
     {
       "key": "main-mysql",
       "type": "mysql",
+      "enable": true,
       "readonly": true,
-      "codexAutoReview": false,
-      "dangerMode": false,
       "connection": {
         "host": "127.0.0.1",
         "port": 3306,
         "databaseName": "app_db",
         "user": "app_reader",
-        "password": "replace-with-password",
-        "connectTimeoutMs": 5000
+        "password": "replace-with-password"
       }
     }
   ]
 }
 ```
 
-`logging.enabled` 默认为 `false`。启用后，如果没有设置 `logging.directory`，日志会写入系统临时目录。相对日志目录会按配置文件所在目录解析。
+`enable` 默认 `true`。禁用目标保留在文件中，不展示在数据库列表或配置摘要中，也不能连接。配置自动热更新，也可调用 `reload_config`；无效更新保留上一份有效配置。禁用目标或更改连接/权限设置会使已有会话失效。
 
-`query.timeoutMs` 是可选项。设置后，服务会把该超时时间应用到数据库操作上，并在超时后中断当前连接。写入超时会返回 `EXECUTION_OUTCOME_UNKNOWN`，表示调用方应核验结果而不是盲目重试。
+`sessionIdleTimeoutMs` 是空闲期限，默认 30 分钟；每次有效数据库操作结束后重新计时，不是从 connect 起固定倒计时。`maxSessions` 默认 32，连接中的条目也计入上限。SQL 执行超时与空闲过期独立。日志默认关闭；启用后默认写入系统临时目录，相对日志路径按配置文件目录解析。
 
 ## 支持的数据库
 
-| 数据库 | 查询 | 元数据 | `explain_query` | `analyze_query` | 写入 | `execute_script` |
-| --- | --- | --- | --- | --- | --- | --- |
-| MySQL | 支持 | 支持 | 支持 | 支持 | 支持 | 支持 |
-| PostgreSQL | 支持 | 支持 | 支持 | 支持 | 支持 | 不支持 |
-| openGauss | 支持 | 支持 | 支持 | 支持 | 支持 | 不支持 |
-| Oracle | 支持 | 支持 | 支持 | 不支持 | 支持 | 不支持 |
-| Redis | 支持 | 有限支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| 数据库 | SQL 查询 | SQL 写入 | 运行时分析 | SQL 脚本 |
+| --- | --- | --- | --- | --- |
+| MySQL | ✓ | ✓ | ✓ | ✓ |
+| PostgreSQL | ✓ | ✓ | ✓ | — |
+| Oracle | ✓ | ✓ | — | — |
+| Redis | — | — | — | — |
 
-`show_variables`、`find_long_running_queries`、`find_blocking_sessions`、`show_locks` 等运维工具依赖数据库账号具备相应可见性和权限。
+SQL 写入需目标授权。Redis 支持 GET、HGETALL、SCAN 和连接探测。
 
-## MCP 工具
-
-配置与发现：
+## 工具
 
 | 工具 | 用途 |
 | --- | --- |
-| `show_loaded_config` | 查看当前配置路径、加载时间、日志状态、查询超时和脱敏连接摘要。 |
-| `reload_config` | 重新加载当前 JSON 配置文件，只有校验成功才替换内存配置。 |
-| `list_databases` | 列出已配置目标的 key、数据库名、类型和只读状态，不打开连接。 |
-| `ping_database` | 测试某个已配置数据库目标的连通性。 |
+| `list_databases` / `show_loaded_config` / `reload_config` | 列出启用目标，查看或重载脱敏配置。 |
+| `connect` | 通过启用目标的 databaseKey 建立独立连接，返回 sessionId。 |
+| `disconnect` | 关闭空闲会话，回滚未提交工作。 |
+| `get_transaction_status` | 读取实际事务状态，不改变事务。 |
+| `commit_transaction` | 提交当前 SQL 事务。 |
+| `rollback_transaction` | 回滚当前整个 SQL 事务。 |
+| `list_schemas` / `list_tables` / `describe_table` | 查询 schema、表和列。 |
+| `list_indexes` / `get_table_statistics` / `show_create_table` | 查询索引、统计和 DDL。 |
+| `list_views` / `search_tables` / `search_columns` | 列出视图或搜索表、列。 |
+| `show_variables` / `find_long_running_queries` | 查看变量和长耗时查询。 |
+| `find_blocking_sessions` / `show_locks` | 查看阻塞和锁，受引擎及账号权限限制。 |
+| `execute_query` | 执行单条只读 SQL，支持参数与返回行数上限。 |
+| `explain_query` / `analyze_query` | 查看静态计划或执行运行时分析；传原始 SQL。 |
+| `execute_statement` | 执行单条非查询 SQL，包括 SET、USE、事务控制、DML 或 DDL。 |
+| `execute_script` | 整段执行 MySQL 脚本，来源为 sql 或服务端 sqlFile（UTF-8，最大 2 MiB）。 |
+| `redis_get` / `redis_hgetall` / `redis_scan` | 读取 string/hash 或用游标扫描 Redis key。 |
 
-SQL 元数据：
+## 会话与事务
 
-| 工具 | 用途 |
-| --- | --- |
-| `list_schemas` | 列出某个 SQL 目标可见的 schema。 |
-| `list_tables` | 列出指定 schema 或默认 schema 下的表和视图。 |
-| `list_views` | 列出指定 schema 或默认 schema 下的视图。 |
-| `describe_table` | 查看表字段和类型，用于编写 join、报表或更新语句前的检查。 |
-| `show_create_table` | 在支持的数据库上返回数据库侧 DDL。 |
-| `search_tables` | 按名称片段搜索表和视图。 |
-| `search_columns` | 在 schema 内按名称片段搜索字段。 |
-| `list_indexes` | 查看某张表的索引。 |
-| `get_table_statistics` | 返回近似行数、存储指标或数据库特定表统计信息。 |
-| `show_variables` | 在支持且有权限时查看数据库运行变量。 |
-| `find_long_running_queries` | 查找超过指定时长的当前运行会话。 |
-| `find_blocking_sessions` | 查看数据库会话阻塞关系。 |
-| `show_locks` | 查看数据库引擎暴露的锁信息。 |
-
-SQL 执行与性能：
-
-| 工具 | 用途 |
-| --- | --- |
-| `execute_query` | 执行一条只读 SQL 查询。会拒绝写入和多语句 SQL。 |
-| `explain_query` | 返回只读 SQL 的静态执行计划。传原始 SQL，不要传 `EXPLAIN ...`。 |
-| `analyze_query` | 在支持的数据库上返回只读 SQL 的运行时分析。传原始 SQL，不要传 `EXPLAIN ANALYZE ...`。 |
-| `execute_statement` | 执行一条 INSERT、UPDATE、DELETE 或 DDL 等非查询 SQL。 |
-| `execute_script` | 在一条 MySQL 连接上整段执行 SQL 脚本，可选开启事务。 |
-
-Redis：
-
-| 工具 | 用途 |
-| --- | --- |
-| `redis_get` | 读取一个 Redis string key。 |
-| `redis_hgetall` | 读取一个 Redis hash key。 |
-| `redis_scan` | 使用游标扫描 Redis key，可带 pattern。 |
-
-## 典型使用流程
-
-1. 调用 `list_databases` 选择已配置的目标。
-2. 调用 `list_schemas`、`search_tables` 或 `list_tables` 找到相关对象。
-3. 编写 join 或优化 SQL 前，先调用 `describe_table` 和 `list_indexes`。
-4. 使用 `execute_query` 执行只读 SQL。
-5. 使用 `explain_query` 或 `analyze_query` 做性能分析。
-6. 使用 `execute_statement` 执行非查询 SQL 变更。
-7. 当脚本需要在同一连接上运行、并依赖会话变量（例如 `SET @var = 1`）、存储过程或一组 DML 时，才使用 `execute_script`。
-
-## 安全模型
-
-- 读工具和写工具分离。只读 SQL 使用 `execute_query`，非查询 SQL 使用 `execute_statement`。
-- `execute_query` 会经过只读 SQL guard，并始终在数据库只读事务中执行，即使目标配置为可写。它会拒绝写入、数据修改 CTE、`SELECT INTO`、文件输出、锁定查询、未知语句类型和多语句 SQL。
-- `dangerMode` 未启用时，SQL 目标由每个 target 的 `readonly` 标志控制。当目标配置 `readonly: true` 时，`execute_statement` 会被拒绝。
-- `execute_statement` 只接受非查询 SQL。它会拒绝 `SELECT` 和其他只读 SQL，确保读写流程分离。
-- 可写 SQL 仅支持配置为 `readonly: false` 或 `dangerMode: true` 的 MySQL、Oracle、PostgreSQL 和 openGauss 目标。
-- `execute_script` 在一条连接上整段运行脚本（因此 `@var` 等会话变量保留），在 `dangerMode` 未启用时需交互式确认。开启 `useTransaction` 时成功提交、失败回滚，但 `CREATE`、`ALTER`、`DROP`、`TRUNCATE`、`GRANT` 等 DDL 会隐式提交、无法回滚。在 `dangerMode` 未启用时，也会拦截写入服务器文件的脚本（`INTO OUTFILE`/`DUMPFILE`）。
-- Redis 工具是只读取向，不暴露写操作。
-- `show_loaded_config` 和发现工具只返回脱敏摘要。密码不会返回给 MCP 客户端。
-- 运行日志默认只记录 SQL 长度、指纹和参数数量，不记录 SQL 原文或参数值。
-- 配置刷新是原子的。新配置无效时，继续使用上一份已校验的内存配置。
-- 连接按请求懒加载，并在请求结束后清理。
-
-### 写入确认
-
-- `dangerMode` 默认 `false`。在指定数据库的 `databases[]` 配置块设置 `"dangerMode": true` 启用 Full Access，优先于 `codexAutoReview`。所有适用于该数据库类型的工具无需人工或自动操作审批，覆盖 `readonly` 并允许脚本写入服务器文件；参数校验、工具的 SQL 语义和数据库账号权限仍然有效。其他数据库配置独立生效。读取、成功和失败的返回 JSON 均附带 `warning` 字段，发现及配置摘要也会在启用目标的条目中显示警告。
-
-警告文案：
+只有 `connect` 能建立连接。其他数据库操作必须传 `sessionId`，不再接受 databaseKey 调用。复用同一个 ID 可保持变量、临时表、当前 schema 及事务；独立调用能延续状态，不必使用脚本。
 
 ```text
-FULL ACCESS: Danger mode is enabled for this target. All available tools can execute without operation approval. Calls may modify or delete data immediately. Use caution.
+connect({ databaseKey: "main-mysql" }) → sessionId = S
+execute_statement({ sessionId: S, sql: "SET @x = 123" })
+execute_query({ sessionId: S, sql: "SELECT @x" }) → 123
+get_transaction_status({ sessionId: S })
+disconnect({ sessionId: S })
 ```
 
-- `dangerMode` 未启用时，`execute_statement` 和 `execute_script` 执行前需要审批，确认内容包括实际 SQL、参数、目标和风险等级。
-- Codex 自动审批扩展默认禁用；在指定数据库的 `databases[]` 配置块中显式设置 `"codexAutoReview": true` 才会为 Codex 客户端添加审批元数据。Codex 开启 `approvals_reviewer = "auto_review"` 时自动审查，否则使用正常的 Accept / Decline / Cancel 确认；审批结果仍由 Codex 策略决定。
-- 接受后执行；拒绝或取消均不执行。
-- 需要确认的操作在客户端不支持 elicitation 或确认请求失败时，会返回错误且不会执行 SQL。
+SET 示例要求目标配置为 `readonly: false` 或 `dangerMode: true`。
 
-## 配置刷新
+同会话并发或执行中断开返回 `SESSION_BUSY`，不同会话可并行。空闲到期、断线或服务重启后 ID 失效，需要显式重新 connect；不自动重连或重放 SQL。长操作执行期间不因空闲过期而断开。
 
-- 服务启动时加载并校验 JSON 配置。
-- 配置文件发生变化后会自动重新加载。
-- 自动刷新带防抖，避免读取写到一半的文件。
-- 刷新是原子的：新配置无效时继续使用上一份内存配置。
-- `reload_config` 可强制手动刷新。
-- `show_loaded_config` 返回当前配置路径、加载时间、日志状态、查询超时和脱敏连接摘要。密码不会返回。
+通过 `execute_statement` 使用引擎原生 SQL 开启事务，使用提交/回滚工具或原生 SQL结束。查询工具不再隐藏开启、提交或回滚事务。结果只在 `structuredContent` 返回一次。普通 SQL 附带最小的 transaction.state，SQL 出错也返回可确认的状态；get_transaction_status 额外返回 autoCommit。状态为 none、active、failed、unknown；Redis 的专用状态查询返回 not_supported，普通读取不附加 SQL 事务信息。sessionId 和空闲期限只在 connect 返回，不重复输出内部版本、时间戳或到期日期。
 
-## Oracle 说明
+`execute_script` 默认参与当前事务。`useTransaction: true` 显式请求脚本事务，已有事务或脚本包含事务控制/autocommit 修改时拒绝；失败时只回滚脚本自行开启的事务。DDL 隐式提交遵循引擎规则。断线或写入超时可能返回 EXECUTION_OUTCOME_UNKNOWN，不自动重放。
 
-Oracle 支持 Thin 和 Thick 模式。省略 `clientMode` 时默认使用 Thin 模式。
+## 写入与审批
 
-Thick 模式需要 Oracle Instant Client：
+SQL 目标保留原有 readonly 配置。可写目标的语句、脚本及非空事务提交需要交互式 Accept / Decline / Cancel 审批；回滚不额外请求写入审批。审批绑定目标和会话版本，等待期间过期或状态变化会阻止执行。不支持 elicitation 的客户端不能执行需要审批的操作。
 
-```json
-{
-  "key": "oracle-thick-example",
-  "type": "oracle",
-  "readonly": true,
-  "codexAutoReview": false,
-  "dangerMode": false,
-  "connection": {
-    "host": "127.0.0.1",
-    "port": 1521,
-    "serviceName": "XEPDB1",
-    "user": "app_reader",
-    "password": "replace-with-password",
-    "clientMode": "thick",
-    "clientLibDir": "C:\\oracle\\instantclient_19_25"
-  }
-}
-```
+`dangerMode: true` 为该目标启用 Full Access，覆盖只读设置并跳过人工/自动审批，返回结果带 Full Access 警告。普通模式下 codexAutoReview: true 添加 Codex 审批元数据。两个字段默认 false；SQL 校验和数据库账号权限仍生效。
 
-同一进程中的所有 Oracle 目标必须使用相同 client mode。Thick 模式目标也必须使用相同 `clientLibDir`。
+`execute_query` 拒绝非查询、加锁、文件输出及多语句 SQL。查询保护不能替代数据库账号权限限制，尤其是带副作用的函数或过程。配置发现不返回密码；日志仅记录 SQL 指纹和参数数量，不记录 SQL 正文或参数值。
 
-Oracle 不支持 `analyze_query`，会返回 `NOT_SUPPORTED`。
+## Oracle
 
-## Skill 集成
-
-仓库内包含一个用于更安全数据库工作流的 Agent skill：
-
-- Skill 路径：`skills/database-mcp/SKILL.md`
-
-当你的 Agent 支持 skills 时建议加载它。它会统一数据库发现、结果大小控制、先读后写默认行为和工具选择。
-
-## MCP 客户端配置
-
-Codex：
-
-```toml
-[mcp_servers.database]
-command = "mcp-database-service"
-args = ["--config", "./config/databases.json"]
-```
-
-Gemini CLI：
-
-```json
-{
-  "mcpServers": {
-    "database": {
-      "type": "stdio",
-      "command": "mcp-database-service",
-      "args": ["--config", "./config/databases.json"]
-    }
-  }
-}
-```
-
-Claude Code：
-
-```json
-{
-  "mcpServers": {
-    "database": {
-      "type": "stdio",
-      "command": "mcp-database-service",
-      "args": ["--config", "./config/databases.json"]
-    }
-  }
-}
-```
+默认使用 Thin 模式。Thick 模式配置 connection.clientMode: "thick"，并用 connection.clientLibDir 指定 Oracle Instant Client。启用的 Oracle 目标须使用相同模式和库目录。Oracle DML 手动提交，使用 commit_transaction 或 rollback_transaction。analyze_query 不支持；explain_query 要求活动事务，用保存点清理执行计划，不结束外层事务。
 
 ## 开发
 
-```bash
+```powershell
 npm install
 npm run build
-node dist/index.js --config ./config/databases.example.json
-```
-
-构建后运行测试：
-
-```bash
 npm test
+npm run verify:reload
+npm run verify:package
 ```
 
-## 从源码全局安装
-
-Windows：
-
-```powershell
-pwsh -File .\scripts\install-global.ps1
-```
-
-Linux/macOS：
-
-```bash
-sh ./scripts/install-global.sh
-```
-
-辅助脚本会安装依赖、构建项目、用 `npm pack` 创建 tarball、全局安装该 tarball，然后删除临时 tarball。它们不使用 `npm link`。
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Agent Skill: [database-mcp](./skills/database-mcp/SKILL.md).

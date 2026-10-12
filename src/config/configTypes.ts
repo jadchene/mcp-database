@@ -1,7 +1,9 @@
-export type DatabaseType = "mysql" | "oracle" | "postgresql" | "redis" | "opengauss";
+export type DatabaseType = "mysql" | "oracle" | "postgresql" | "redis";
 
 export interface BaseDatabaseConfig {
   key: string;
+  /** 是否启用目标；省略时默认启用，禁用目标不展示给客户端。 */
+  enable?: boolean;
   type: DatabaseType;
   readonly: boolean;
   /** 显式启用本数据库的 Codex 自动审批扩展，默认禁用。 */
@@ -39,7 +41,7 @@ export interface OracleDatabaseConfig extends BaseDatabaseConfig {
 }
 
 export interface PostgresDatabaseConfig extends BaseDatabaseConfig {
-  type: "postgresql" | "opengauss";
+  type: "postgresql";
   connection: {
     host: string;
     port?: number;
@@ -80,12 +82,18 @@ export interface QueryConfig {
 }
 
 export interface RootConfig {
+  /** 会话空闲超时毫秒数，默认 30 分钟。 */
+  sessionIdleTimeoutMs?: number;
+  /** 同时建立或持有的会话上限，默认 32。 */
+  maxSessions?: number;
   databases: DatabaseConfig[];
   logging: LoggingConfig;
   query: QueryConfig;
 }
 
 export interface LoadedConfig {
+  sessionIdleTimeoutMs?: number;
+  maxSessions?: number;
   configPath: string;
   loadedAt: string;
   databases: DatabaseConfig[];

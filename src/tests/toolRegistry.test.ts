@@ -54,19 +54,19 @@ test("execute_script requires exactly one of sql or sqlFile", async () => {
 
   const schema = tool.inputSchema;
   const required = schema.required as string[] | undefined;
-  assert.ok(required?.includes("databaseKey"));
+  assert.ok(required?.includes("sessionId"));
 
   // 通过 run 校验 superRefine 的二选一约束：两者都缺或都填都会失败。
   // makeTool 在 safeParse 失败时抛出通用 INVALID_ARGUMENT，details.issues 里含具体提示。
   await assert.rejects(
-    () => tool.run({ databaseKey: "mysql-write" }, fakeContext()),
+    () => tool.run({ sessionId: "mysql-write" }, fakeContext()),
     (error: unknown) =>
       error instanceof ApplicationError &&
       error.code === "INVALID_ARGUMENT" &&
       /exactly one of sql or sqlfile/i.test(JSON.stringify(error.details?.issues ?? []))
   );
   await assert.rejects(
-    () => tool.run({ databaseKey: "mysql-write", sql: "select 1", sqlFile: "x.sql" }, fakeContext()),
+    () => tool.run({ sessionId: "mysql-write", sql: "select 1", sqlFile: "x.sql" }, fakeContext()),
     (error: unknown) =>
       error instanceof ApplicationError &&
       error.code === "INVALID_ARGUMENT" &&

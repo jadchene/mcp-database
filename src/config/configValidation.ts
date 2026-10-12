@@ -4,6 +4,7 @@ import { ApplicationError } from "../core/errors.js";
 import type { DatabaseConfig, RootConfig } from "./configTypes.js";
 
 const readonlySchema = z.boolean();
+const enableSchema = z.boolean().default(true);
 const codexAutoReviewSchema = z.boolean().default(false);
 const dangerModeSchema = z.boolean().default(false);
 const keySchema = z.string().min(1);
@@ -11,6 +12,7 @@ const portSchema = z.number().int().min(1).max(65_535).optional();
 const timeoutSchema = z.number().int().min(1).max(2_147_483_647).optional();
 
 const mysqlSchema = z.object({
+  enable: enableSchema,
   key: keySchema,
   type: z.literal("mysql"),
   readonly: readonlySchema,
@@ -28,6 +30,7 @@ const mysqlSchema = z.object({
 }).strict();
 
 const oracleSchema = z.object({
+  enable: enableSchema,
   key: keySchema,
   type: z.literal("oracle"),
   readonly: readonlySchema,
@@ -73,6 +76,7 @@ const postgresConnectionSchema = z.object({
 }).strict();
 
 const postgresSchema = z.object({
+  enable: enableSchema,
   key: keySchema,
   type: z.literal("postgresql"),
   readonly: readonlySchema,
@@ -81,16 +85,8 @@ const postgresSchema = z.object({
   connection: postgresConnectionSchema
 }).strict();
 
-const openGaussSchema = z.object({
-  key: keySchema,
-  type: z.literal("opengauss"),
-  readonly: readonlySchema,
-  codexAutoReview: codexAutoReviewSchema,
-  dangerMode: dangerModeSchema,
-  connection: postgresConnectionSchema
-}).strict();
-
 const redisSchema = z.object({
+  enable: enableSchema,
   key: keySchema,
   type: z.literal("redis"),
   readonly: readonlySchema,
@@ -117,10 +113,12 @@ const redisSchema = z.object({
 }).strict();
 
 const databaseArraySchema = z
-  .array(z.discriminatedUnion("type", [mysqlSchema, oracleSchema, postgresSchema, openGaussSchema, redisSchema]))
+  .array(z.discriminatedUnion("type", [mysqlSchema, oracleSchema, postgresSchema, redisSchema]))
   .min(1);
 
 const rootConfigSchema = z.object({
+  sessionIdleTimeoutMs: z.number().int().min(100).max(86400000).default(1800000),
+  maxSessions: z.number().int().min(1).max(1024).default(32),
   databases: databaseArraySchema,
   logging: z
     .object({
@@ -144,7 +142,7 @@ const rootConfigSchema = z.object({
 export function validateDatabaseConfig(rawConfig: unknown): RootConfig {
   const parsed = rootConfigSchema.safeParse(rawConfig);
   if (!parsed.success) {
-    throw new ApplicationError("CONFIG_ERROR", "Invalid database configuration", {
+    throw new ApplicationError("CONFIG_ERROR", `Invalid database configuration: ${parsed.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`, {
       issues: parsed.error.issues
     });
   }
@@ -159,6 +157,8 @@ export function validateDatabaseConfig(rawConfig: unknown): RootConfig {
   }
 
   return {
+    sessionIdleTimeoutMs: parsed.data.sessionIdleTimeoutMs,
+    maxSessions: parsed.data.maxSessions,
     databases: parsed.data.databases as DatabaseConfig[],
     logging: {
       enabled: parsed.data.logging.enabled,

@@ -38,7 +38,6 @@ test("Codex auto review requires per-database boolean opt-in for every database 
   const targets = [
     { type: "mysql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
     { type: "postgresql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
-    { type: "opengauss", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
     { type: "oracle", connection: { host: "localhost", serviceName: "db", user: "test", password: "" } },
     { type: "redis", connection: { host: "localhost" } }
   ];
@@ -60,7 +59,6 @@ test("danger mode defaults to false and requires per-target boolean opt-in for e
   const targets = [
     { type: "mysql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
     { type: "postgresql", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
-    { type: "opengauss", connection: { host: "localhost", databaseName: "db", user: "test", password: "" } },
     { type: "oracle", connection: { host: "localhost", serviceName: "db", user: "test", password: "" } },
     { type: "redis", connection: { host: "localhost" } }
   ];

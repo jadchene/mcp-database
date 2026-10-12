@@ -9,13 +9,15 @@ import type { LoadedConfig } from "../config/configTypes.js";
 import { ApplicationError } from "../core/errors.js";
 import type { RedisDatabaseAdapter, SqlDatabaseAdapter } from "../db/types.js";
 import { scanScriptRisk } from "../db/scriptGuard.js";
+import { inspectSqlStatement } from "../db/readonlyGuard.js";
 
+const connectSchema = z.object({ databaseKey: z.string().min(1).describe("Enabled target key from list_databases.") }).strict();
 const emptySchema = z.object({}).strict();
-const databaseKeySchema = z.object({
-  databaseKey: z
+const sessionIdSchema = z.object({
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers.")
+    .describe("Existing session ID returned by connect.")
 }).strict();
 const metadataMaxRowsSchema = z
   .number()
@@ -24,12 +26,12 @@ const metadataMaxRowsSchema = z
   .max(1000)
   .optional()
   .describe("Row limit; defaults to 200.");
-const listSchemasSchema = databaseKeySchema.extend({ maxRows: metadataMaxRowsSchema });
+const listSchemasSchema = sessionIdSchema.extend({ maxRows: metadataMaxRowsSchema });
 const listTablesSchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
+    .describe("Existing session ID returned by connect."),
   schema: z
     .string()
     .min(1)
@@ -38,10 +40,10 @@ const listTablesSchema = z.object({
   maxRows: metadataMaxRowsSchema
 }).strict();
 const describeTableSchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
+    .describe("Existing session ID returned by connect."),
   schema: z
     .string()
     .min(1)
@@ -56,10 +58,10 @@ const limitedDescribeTableSchema = describeTableSchema.extend({ maxRows: metadat
 const listIndexesSchema = limitedDescribeTableSchema;
 const getTableStatisticsSchema = describeTableSchema;
 const schemaPatternSchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
+    .describe("Existing session ID returned by connect."),
   schema: z
     .string()
     .min(1)
@@ -71,10 +73,10 @@ const schemaPatternSchema = z.object({
     .describe("Case-insensitive name fragment; no SQL LIKE expression.")
 }).strict();
 const showVariablesSchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
+    .describe("Existing session ID returned by connect."),
   pattern: z
     .string()
     .min(1)
@@ -82,10 +84,10 @@ const showVariablesSchema = z.object({
     .describe("Optional case-insensitive pattern to filter variable names.")
 }).strict();
 const longRunningQueriesSchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
+    .describe("Existing session ID returned by connect."),
   minDurationSeconds: z
     .number()
     .int()
@@ -94,10 +96,10 @@ const longRunningQueriesSchema = z.object({
     .describe("Minimum runtime in seconds; defaults to 30.")
 }).strict();
 const executeQuerySchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
+    .describe("Existing session ID returned by connect."),
   sql: z
     .string()
     .min(1)
@@ -117,14 +119,14 @@ const executeQuerySchema = z.object({
 const explainQuerySchema = executeQuerySchema;
 const analyzeQuerySchema = executeQuerySchema;
 const executeStatementSchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Target key from list_databases.key; use databaseName for SQL identifiers."),
+    .describe("Existing session ID returned by connect."),
   sql: z
     .string()
     .min(1)
-    .describe("One non-query SQL statement such as INSERT, UPDATE, DELETE, MERGE, or DDL. Do not pass SELECT here."),
+    .describe("One non-query SQL statement: SET, USE, transaction control, DML, or DDL. Use execute_query for SELECT."),
   params: z
     .array(z.unknown())
     .optional()
@@ -132,11 +134,11 @@ const executeStatementSchema = z.object({
 }).strict();
 const executeScriptSchema = z
   .object({
-    databaseKey: z
+    sessionId: z
       .string()
       .min(1)
       .describe(
-        "Target key from list_databases.key; use databaseName for SQL identifiers."
+        "Existing session ID returned by connect."
       ),
     sql: z
       .string()
@@ -157,7 +159,7 @@ const executeScriptSchema = z
       .optional()
       .default(false)
       .describe(
-        "Wrap the script in a transaction; defaults to false. MySQL DDL implicitly commits and cannot be rolled back."
+        "Explicitly wrap a script in its own transaction; requires no existing transaction or transaction-control SQL. DDL may implicitly commit."
       )
   })
   .strict()
@@ -174,20 +176,20 @@ const executeScriptSchema = z
     }
   });
 const redisKeySchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Redis target key from list_databases.key."),
+    .describe("Existing Redis session ID returned by connect."),
   key: z
     .string()
     .min(1)
     .describe("Exact Redis key name.")
 }).strict();
 const redisScanSchema = z.object({
-  databaseKey: z
+  sessionId: z
     .string()
     .min(1)
-    .describe("Redis target key from list_databases.key."),
+    .describe("Existing Redis session ID returned by connect."),
   cursor: z
     .string()
     .optional()
@@ -206,17 +208,23 @@ const redisScanSchema = z.object({
     .describe("SCAN count hint; defaults to 100.")
 }).strict();
 
-type ToolExecutionContext = {
+export type ToolExecutionContext = {
+  connect(databaseKey: string): Promise<Record<string, unknown>>;
+  disconnect(sessionId: string): Promise<Record<string, unknown>>;
+  getDatabase(sessionId: string): LoadedConfig["databases"][number];
+  getTransactionStatus(sessionId: string): Promise<Record<string, unknown>>;
   getConfig(): LoadedConfig;
   reloadConfig(): Promise<LoadedConfig>;
-  useSqlDatabase<T>(databaseKey: string, action: (adapter: SqlDatabaseAdapter) => Promise<T>): Promise<T>;
-  useRedisDatabase<T>(databaseKey: string, action: (adapter: RedisDatabaseAdapter) => Promise<T>): Promise<T>;
+  useSqlDatabase<T>(sessionId: string, action: (adapter: SqlDatabaseAdapter) => Promise<T>): Promise<T>;
+  useRedisDatabase<T>(sessionId: string, action: (adapter: RedisDatabaseAdapter) => Promise<T>): Promise<T>;
   confirmStatementExecution(input: {
+    sessionId: string;
     databaseKey: string;
     sql: string;
     params?: unknown[];
   }): Promise<{ status: "confirmed"; databaseFingerprint: string }>;
   confirmScriptExecution(input: {
+    sessionId: string;
     databaseKey: string;
     /** 解析后的实际 SQL，确保审批内容与执行内容一致。 */
     sql: string;
@@ -263,14 +271,14 @@ function makeTool<T>(
 }
 
 
-function assertSqlTarget(databaseKey: string, config: LoadedConfig): Exclude<LoadedConfig["databases"][number], { type: "redis" }> {
-  const database = config.databaseMap.get(databaseKey);
+function assertSqlTarget(sessionId: string, context: ToolExecutionContext): Exclude<LoadedConfig["databases"][number], { type: "redis" }> {
+  const database = context.getDatabase(sessionId);
   if (!database) {
-    throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${databaseKey}`);
+    throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${sessionId}`);
   }
 
   if (database.type === "redis") {
-    throw new ApplicationError("NOT_SUPPORTED", `${databaseKey} is a Redis target and does not support this SQL tool`);
+    throw new ApplicationError("NOT_SUPPORTED", `${sessionId} is a Redis target and does not support this SQL tool`);
   }
 
   return database;
@@ -339,7 +347,6 @@ function buildShowCreateTableQuery(
     case "mysql":
       return { sql: `SHOW CREATE TABLE \`${table.replace(/`/g, "``")}\`` };
     case "postgresql":
-    case "opengauss":
       return null;
     case "oracle":
       return {
@@ -378,7 +385,6 @@ function buildListViewsQuery(
         params: [schema ?? null]
       };
     case "postgresql":
-    case "opengauss":
       return {
         sql: `
           SELECT table_schema AS schema, table_name AS name
@@ -421,7 +427,6 @@ function buildSearchTablesQuery(
         params: [schema ?? null, likePattern(pattern)]
       };
     case "postgresql":
-    case "opengauss":
       return {
         sql: `
           SELECT table_schema AS schema, table_name AS tableName, table_type AS objectType
@@ -467,7 +472,6 @@ function buildSearchColumnsQuery(
         params: [schema ?? null, likePattern(pattern)]
       };
     case "postgresql":
-    case "opengauss":
       return {
         sql: `
           SELECT table_schema AS schema, table_name AS tableName, column_name AS columnName, 'TABLE' AS objectType
@@ -504,7 +508,6 @@ function buildShowVariablesQuery(
         ? { sql: "SHOW VARIABLES LIKE ?", params: [likePattern(pattern)] }
         : { sql: "SHOW VARIABLES" };
     case "postgresql":
-    case "opengauss":
       return {
         sql: `
           SELECT name, setting AS value
@@ -552,7 +555,6 @@ function buildLongRunningQueriesQuery(
         params: [minDurationSeconds]
       };
     case "postgresql":
-    case "opengauss":
       return {
         sql: `
           SELECT
@@ -616,7 +618,6 @@ function buildBlockingSessionsQuery(
         `
       };
     case "postgresql":
-    case "opengauss":
       return {
         sql: `
           SELECT
@@ -691,7 +692,6 @@ function buildShowLocksQuery(
         `
       };
     case "postgresql":
-    case "opengauss":
       return {
         sql: `
           SELECT
@@ -732,6 +732,23 @@ function buildShowLocksQuery(
 
 export function buildToolRegistry(): ToolDefinition[] {
   return [
+    makeTool("connect", "Open an independent persistent database session. Reuse its sessionId for subsequent operations.", connectSchema,
+      (args, context) => context.connect(args.databaseKey)),
+    makeTool("disconnect", "Close an idle session and roll back uncommitted work; its ID cannot be reused.", sessionIdSchema,
+      (args, context) => context.disconnect(args.sessionId)),
+    makeTool("get_transaction_status", "Read the actual transaction state on the existing session without changing it.", sessionIdSchema,
+      (args, context) => context.getTransactionStatus(args.sessionId)),
+    makeTool("commit_transaction", "Commit the current SQL transaction. Failed transactions must be rolled back. No reconnect or retry.", sessionIdSchema,
+      async (args, context) => {
+        const status = await context.getTransactionStatus(args.sessionId);
+        const state = (status.transaction as { state: string }).state;
+        if (state === "none") return { ...status, outcome: "no_transaction" };
+        if (state === "failed") throw new ApplicationError("TRANSACTION_FAILED", "Transaction failed; roll back before continuing", status);
+        await context.confirmStatementExecution({ sessionId: args.sessionId, databaseKey: context.getDatabase(args.sessionId).key, sql: "COMMIT" });
+        return context.useSqlDatabase(args.sessionId, adapter => adapter.commitTransaction());
+      }),
+    makeTool("rollback_transaction", "Roll back the whole current SQL transaction on the existing connection, including a failed transaction.", sessionIdSchema,
+      (args, context) => context.useSqlDatabase(args.sessionId, adapter => adapter.rollbackTransaction())),
     makeTool(
       "show_loaded_config",
       "Inspect the active config path, load time, and sanitized target settings.",
@@ -752,32 +769,32 @@ export function buildToolRegistry(): ToolDefinition[] {
     ),
     makeTool(
       "list_databases",
-      "List configured SQL and Redis targets without connecting. Use key as databaseKey in tool calls and databaseName in SQL.",
+      "List enabled SQL and Redis targets without connecting. Pass key to connect; use databaseName in SQL.",
       emptySchema,
       async (_args, context) => ({
-        items: context.getConfig().databases.map((database) => summarizeDatabaseListItem(database))
+        items: context.getConfig().databases.filter((database) => database.enable !== false).map((database) => summarizeDatabaseListItem(database))
       })
     ),
     makeTool(
       "ping_database",
       "Test SQL or Redis connectivity and report latency.",
-      databaseKeySchema,
+      sessionIdSchema,
       async (args, context) => {
-        const database = context.getConfig().databaseMap.get(args.databaseKey);
+        const database = context.getDatabase(args.sessionId);
         if (!database) {
-          throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${args.databaseKey}`);
+          throw new ApplicationError("DATABASE_NOT_FOUND", `Database not found: ${args.sessionId}`);
         }
 
         if (database.type === "redis") {
-          return context.useRedisDatabase(args.databaseKey, async (adapter) => ({
-            databaseKey: args.databaseKey,
+          return context.useRedisDatabase(args.sessionId, async (adapter) => ({
+            databaseKey: context.getDatabase(args.sessionId).key,
             type: adapter.config.type,
             ...(await adapter.ping())
           }));
         }
 
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.ping())
         }));
@@ -788,8 +805,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "List schemas visible to the SQL target's user. Results may be truncated.",
       listSchemasSchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.listSchemas(args.maxRows ?? 200))
       }))
@@ -799,8 +816,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "List SQL tables and views in a schema. Results may be truncated.",
       listTablesSchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.listTables(args.schema, args.maxRows ?? 200))
       }))
@@ -810,8 +827,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Inspect SQL columns, types, defaults, nullability, comments, and primary keys. Results may be truncated.",
       limitedDescribeTableSchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.describeTable(args.schema, args.table, args.maxRows ?? 200))
       }))
@@ -821,8 +838,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Inspect SQL indexes. Some engines return full definitions instead of per-column rows.",
       listIndexesSchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.listIndexes(args.schema, args.table, args.maxRows ?? 200))
       }))
@@ -832,30 +849,30 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Get approximate, engine-specific SQL table statistics; returns null when unavailable.",
       getTableStatisticsSchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         item: await adapter.getTableStatistics(args.schema, args.table)
       }))
     ),
     makeTool(
       "show_create_table",
-      "Get table or view DDL. MySQL and Oracle only; PostgreSQL and openGauss return NOT_SUPPORTED.",
+      "Get table or view DDL. MySQL and Oracle only; PostgreSQL return NOT_SUPPORTED.",
       describeTableSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildShowCreateTableQuery(database.type, args.schema, args.table);
         if (!query) {
           throw new ApplicationError("NOT_SUPPORTED", `show_create_table is not supported for ${database.type} in the current implementation`);
         }
 
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => {
+        return context.useSqlDatabase(args.sessionId, async (adapter) => {
           const result = await adapter.executeQuery(query.sql, query.params, 10);
 
           if (database.type === "mysql") {
             const row = result.rows[0] ?? {};
             return {
-              databaseKey: args.databaseKey,
+              databaseKey: context.getDatabase(args.sessionId).key,
               type: adapter.config.type,
               objectType: "TABLE",
               schema: args.schema ?? null,
@@ -866,7 +883,7 @@ export function buildToolRegistry(): ToolDefinition[] {
 
           const row = result.rows[0] ?? {};
           return {
-            databaseKey: args.databaseKey,
+            databaseKey: context.getDatabase(args.sessionId).key,
             type: adapter.config.type,
             objectType: String(row.objecttype ?? row.objectType ?? "TABLE"),
             schema: row.schema ?? args.schema ?? null,
@@ -881,10 +898,10 @@ export function buildToolRegistry(): ToolDefinition[] {
       "List SQL views in a schema.",
       listTablesSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildListViewsQuery(database.type, args.schema);
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeQuery(query.sql, query.params, 1000))
         }));
@@ -895,10 +912,10 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Find SQL tables and views by a name fragment.",
       schemaPatternSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildSearchTablesQuery(database.type, args.pattern, args.schema);
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeQuery(query.sql, query.params, 1000))
         }));
@@ -909,10 +926,10 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Find SQL columns by a name fragment across a schema.",
       schemaPatternSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildSearchColumnsQuery(database.type, args.pattern, args.schema);
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeQuery(query.sql, query.params, 1000))
         }));
@@ -923,10 +940,10 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Inspect SQL runtime parameters as name-value rows.",
       showVariablesSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildShowVariablesQuery(database.type, args.pattern);
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeQuery(query.sql, query.params, 1000))
         }));
@@ -937,10 +954,10 @@ export function buildToolRegistry(): ToolDefinition[] {
       "List currently running SQL sessions above the duration threshold, subject to account visibility.",
       longRunningQueriesSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildLongRunningQueriesQuery(database.type, args.minDurationSeconds ?? 30);
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeQuery(query.sql, query.params, 1000))
         }));
@@ -949,12 +966,12 @@ export function buildToolRegistry(): ToolDefinition[] {
     makeTool(
       "find_blocking_sessions",
       "Find current SQL blocking relationships visible to the configured account.",
-      databaseKeySchema,
+      sessionIdSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildBlockingSessionsQuery(database.type);
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeQuery(query.sql, query.params, 1000))
         }));
@@ -963,12 +980,12 @@ export function buildToolRegistry(): ToolDefinition[] {
     makeTool(
       "show_locks",
       "Inspect current SQL locks visible to the configured account.",
-      databaseKeySchema,
+      sessionIdSchema,
       async (args, context) => {
-        const database = assertSqlTarget(args.databaseKey, context.getConfig());
+        const database = assertSqlTarget(args.sessionId, context);
         const query = buildShowLocksQuery(database.type);
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-          databaseKey: args.databaseKey,
+        return context.useSqlDatabase(args.sessionId, async (adapter) => ({
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeQuery(query.sql, query.params, 1000))
         }));
@@ -979,8 +996,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Run one read-only SQL statement: SELECT, SHOW, DESCRIBE, DESC, or WITH ... SELECT.",
       executeQuerySchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.executeQuery(args.sql, args.params, args.maxRows ?? 200))
       }))
@@ -990,35 +1007,39 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Get a static plan for a read-only SQL query without executing it. Pass original SQL; the server adds EXPLAIN.",
       explainQuerySchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.explainQuery(args.sql, args.params, args.maxRows ?? 200))
       }))
     ),
     makeTool(
       "analyze_query",
-      "Execute a read-only query for runtime plan metrics. Pass original SQL. MySQL, PostgreSQL, and openGauss only; Oracle returns NOT_SUPPORTED.",
+      "Execute a read-only query for runtime plan metrics. Pass original SQL. MySQL and PostgreSQL only; Oracle returns NOT_SUPPORTED.",
       analyzeQuerySchema,
       async (args, context) =>
-      context.useSqlDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useSqlDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.analyzeQuery(args.sql, args.params, args.maxRows ?? 200))
       }))
     ),
     makeTool(
       "execute_statement",
-      "Execute one non-query SQL statement such as INSERT, UPDATE, DELETE, MERGE, or DDL.",
+      "Execute one non-query SQL statement, including SET, USE, transaction control, DML, or DDL. Rollback needs no write approval.",
       executeStatementSchema,
       async (args, context) => {
+      if (inspectSqlStatement(args.sql).firstKeyword === "ROLLBACK") {
+        return context.useSqlDatabase(args.sessionId, adapter => adapter.executeStatement(args.sql, args.params));
+      }
       const confirmation = await context.confirmStatementExecution({
-        databaseKey: args.databaseKey,
+        sessionId: args.sessionId,
+        databaseKey: context.getDatabase(args.sessionId).key,
         sql: args.sql,
         params: args.params
       });
 
-      const confirmedDatabase = context.getConfig().databaseMap.get(args.databaseKey);
+      const confirmedDatabase = context.getDatabase(args.sessionId);
       if (
         !confirmedDatabase ||
         fingerprintDatabaseTarget(confirmedDatabase) !== confirmation.databaseFingerprint
@@ -1029,13 +1050,13 @@ export function buildToolRegistry(): ToolDefinition[] {
         );
       }
 
-      return context.useSqlDatabase(args.databaseKey, async (adapter) => {
+      return context.useSqlDatabase(args.sessionId, async (adapter) => {
         if (adapter.config.readonly && adapter.config.dangerMode !== true) {
-          throw new ApplicationError("NOT_SUPPORTED", `${args.databaseKey} is configured as readonly`);
+          throw new ApplicationError("NOT_SUPPORTED", `${args.sessionId} is configured as readonly`);
         }
 
         return {
-          databaseKey: args.databaseKey,
+          databaseKey: context.getDatabase(args.sessionId).key,
           type: adapter.config.type,
           ...(await adapter.executeStatement(args.sql, args.params))
         };
@@ -1047,13 +1068,14 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Execute a whole SQL script on one MySQL connection, preserving session state. Other adapters return NOT_SUPPORTED. Scripts are not split; partial results are unavailable.",
       executeScriptSchema,
       async (args, context) => {
-        assertSqlTarget(args.databaseKey, context.getConfig());
+        assertSqlTarget(args.sessionId, context);
 
         const { scriptText, sourceKind, sourceLabel } = await resolveScriptSource(args);
         const scriptSecurity = scanScriptRisk(scriptText);
 
         const confirmation = await context.confirmScriptExecution({
-          databaseKey: args.databaseKey,
+          sessionId: args.sessionId,
+          databaseKey: context.getDatabase(args.sessionId).key,
           sql: scriptText,
           sourceKind,
           sourceLabel,
@@ -1063,7 +1085,7 @@ export function buildToolRegistry(): ToolDefinition[] {
           highRiskKeywords: scriptSecurity.highRiskKeywords
         });
 
-        const confirmedDatabase = context.getConfig().databaseMap.get(args.databaseKey);
+        const confirmedDatabase = context.getDatabase(args.sessionId);
         if (
           !confirmedDatabase ||
           fingerprintDatabaseTarget(confirmedDatabase) !== confirmation.databaseFingerprint
@@ -1081,9 +1103,9 @@ export function buildToolRegistry(): ToolDefinition[] {
           );
         }
 
-        return context.useSqlDatabase(args.databaseKey, async (adapter) => {
+        return context.useSqlDatabase(args.sessionId, async (adapter) => {
           if (adapter.config.readonly && adapter.config.dangerMode !== true) {
-            throw new ApplicationError("NOT_SUPPORTED", `${args.databaseKey} is configured as readonly`);
+            throw new ApplicationError("NOT_SUPPORTED", `${args.sessionId} is configured as readonly`);
           }
 
           const result = await adapter.executeScript(scriptText, {
@@ -1091,11 +1113,12 @@ export function buildToolRegistry(): ToolDefinition[] {
           });
 
           return {
-            databaseKey: args.databaseKey,
+            databaseKey: context.getDatabase(args.sessionId).key,
             type: adapter.config.type,
             scriptMode: sourceKind,
             source: sourceLabel,
-            ...result
+            ...result,
+            scriptTransaction: result.transaction
           };
         });
       }
@@ -1105,8 +1128,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Read an exact Redis string key; returns null if absent.",
       redisKeySchema,
       async (args, context) =>
-      context.useRedisDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useRedisDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         key: args.key,
         value: await adapter.get(args.key)
@@ -1117,8 +1140,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Read all fields of an exact Redis hash key.",
       redisKeySchema,
       async (args, context) =>
-      context.useRedisDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useRedisDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         key: args.key,
         value: await adapter.hgetall(args.key)
@@ -1129,8 +1152,8 @@ export function buildToolRegistry(): ToolDefinition[] {
       "Discover Redis keys incrementally. Continue with nextCursor until it is 0 or enough keys are found.",
       redisScanSchema,
       async (args, context) =>
-      context.useRedisDatabase(args.databaseKey, async (adapter) => ({
-        databaseKey: args.databaseKey,
+      context.useRedisDatabase(args.sessionId, async (adapter) => ({
+        databaseKey: context.getDatabase(args.sessionId).key,
         type: adapter.config.type,
         ...(await adapter.scan(args.cursor ?? "0", args.pattern, args.count ?? 100))
       }))

@@ -10,6 +10,15 @@ export class RedisAdapter implements RedisDatabaseAdapter {
   private readonly queryTimeoutMs: number | null;
 
   private client: RedisClientType | null = null;
+  private readonly lostListeners = new Set<() => void>();
+
+  /** 通知会话池连接中断；禁止自动重连和离线队列。 */
+  public onConnectionLost(listener: () => void): () => void { this.lostListeners.add(listener); return () => this.lostListeners.delete(listener); }
+
+  public isConnected(): boolean { return this.client?.isReady === true; }
+
+  /** 强制终止当前 Redis 操作。 */
+  public async abort(): Promise<void> { this.client?.destroy(); this.client = null; }
 
   public constructor(config: RedisDatabaseConfig, queryTimeoutMs: number | null) {
     this.config = config;
@@ -22,12 +31,16 @@ export class RedisAdapter implements RedisDatabaseAdapter {
       this.client = this.config.connection.url
         ? redis.createClient({
             url: this.config.connection.url,
+            disableOfflineQueue: true,
             socket: {
+              reconnectStrategy: false,
               connectTimeout: this.config.connection.connectTimeoutMs
             }
           })
         : redis.createClient({
+            disableOfflineQueue: true,
             socket: {
+              reconnectStrategy: false,
               host: this.config.connection.host,
               port: this.config.connection.port ?? 6379,
               connectTimeout: this.config.connection.connectTimeoutMs
@@ -37,6 +50,8 @@ export class RedisAdapter implements RedisDatabaseAdapter {
             password: this.config.connection.password
           });
 
+      this.client.on("error", () => { for (const listener of this.lostListeners) listener(); });
+      this.client.on("end", () => { for (const listener of this.lostListeners) listener(); });
       await this.withTimeout("redis_connect", { operation: "connect" }, () => this.client!.connect());
     } catch (error) {
       throw toApplicationError(error, "CONNECTION_ERROR");
@@ -48,7 +63,7 @@ export class RedisAdapter implements RedisDatabaseAdapter {
       return;
     }
 
-    await this.client.quit();
+    if (this.client.isOpen) this.client.destroy();
     this.client = null;
   }
 

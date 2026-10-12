@@ -20,7 +20,8 @@
         "connectTimeoutMs": 5000
       },
       "dangerMode": false,
-      "codexAutoReview": false
+      "codexAutoReview": false,
+      "enable": true
     },
     {
       "key": "cache-redis",
@@ -31,7 +32,8 @@
         "connectTimeoutMs": 5000
       },
       "dangerMode": false,
-      "codexAutoReview": false
+      "codexAutoReview": false,
+      "enable": true
     },
     {
       "key": "oracle-thick-example",
@@ -48,7 +50,10 @@
         "clientLibDir": "C:\\oracle\\instantclient_19_25"
       },
       "dangerMode": false,
-      "codexAutoReview": false
+      "codexAutoReview": false,
+      "enable": true
     }
-  ]
+  ],
+  "sessionIdleTimeoutMs": 1800000,
+  "maxSessions": 32
 }

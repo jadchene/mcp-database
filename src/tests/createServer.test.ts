@@ -61,6 +61,8 @@ for (const supportsElicitation of [false, true]) {
       assert.equal(this.config.readonly, false);
     });
     t.mock.method(MysqlAdapter.prototype, "close", async () => undefined);
+    t.mock.method(MysqlAdapter.prototype, "isConnected", () => true);
+    t.mock.method(MysqlAdapter.prototype, "getTransactionStatus", async () => ({ state: "none" as const, autoCommit: true, observedAt: new Date().toISOString() }));
     const statement = t.mock.method(MysqlAdapter.prototype, "executeStatement", async () => ({ command: "DROP", affectedRows: 1 }));
     const script = t.mock.method(MysqlAdapter.prototype, "executeScript", async () => ({
       command: "SCRIPT", statementCount: 1, statements: [], totalAffectedRows: 1,
@@ -79,6 +81,7 @@ for (const supportsElicitation of [false, true]) {
     t.after(async () => {
       await client.close();
       await server.close();
+      for (const [signal, original] of listeners) assert.deepEqual(process.listeners(signal), original, `${signal} listeners must be restored`);
       unwatchFile(configPath);
       for (const listener of process.listeners("exit")) {
         if (!exitListeners.includes(listener)) process.removeListener("exit", listener);
@@ -95,23 +98,28 @@ for (const supportsElicitation of [false, true]) {
       return { action: "decline" };
     });
     await client.connect(clientTransport);
+    const sessionId = await openSession(client, target.key);
     const calls = [
-      { name: "execute_statement", arguments: { databaseKey: target.key, sql: "DROP TABLE mock_only" } },
-      { name: "execute_script", arguments: { databaseKey: target.key, sql: "SELECT 1 INTO OUTFILE '/tmp/mock-only'" } },
-      { name: "execute_script", arguments: { databaseKey: target.key, sqlFile: path.resolve("src/tests/fixtures/approval.sql") } },
-      { name: "execute_query", arguments: { databaseKey: target.key, sql: "SELECT 1" } }
+      { name: "execute_statement", arguments: { sessionId, sql: "DROP TABLE mock_only" } },
+      { name: "execute_script", arguments: { sessionId, sql: "SELECT 1 INTO OUTFILE '/tmp/mock-only'" } },
+      { name: "execute_script", arguments: { sessionId, sqlFile: path.resolve("src/tests/fixtures/approval.sql") } },
+      { name: "execute_query", arguments: { sessionId, sql: "SELECT 1" } }
     ];
     for (const call of calls) {
       const result = await client.callTool(call);
       assert.notEqual(result.isError, true, call.name);
-      const json = JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+      const json = toolPayload(result);
       assert.equal(json.warning, FULL_ACCESS_WARNING);
-      assert.equal(json.databaseKey, target.key);
+      assert.equal(json.databaseKey, undefined);
+      assert.equal(json.sessionId, undefined);
+      assert.equal(json.sessionStateVersion, undefined);
+      assert.deepEqual(json.transaction, { state: "none" });
+      assert.deepEqual(result.content, []);
     }
     assert.equal(approvals, 0);
     assert.equal(statement.mock.calls.length, 1);
     assert.equal(script.mock.calls.length, 2);
-    assert.equal(databaseConnect.mock.calls.length, 4);
+    assert.equal(databaseConnect.mock.calls.length, 1);
     assert.equal(target.readonly, true);
     for (const args of [
       { databaseKey: target.key, sql: "DROP TABLE mock_only", dangerMode: true },
@@ -119,22 +127,23 @@ for (const supportsElicitation of [false, true]) {
     ]) {
       const result = await client.callTool({ name: "execute_statement", arguments: args });
       assert.equal(result.isError, true);
-      const json = JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+      const json = toolPayload(result);
       assert.equal(json.warning, FULL_ACCESS_WARNING);
       assert.equal(json.error.code, "INVALID_ARGUMENT");
     }
-    const blocked = await client.callTool({ name: "execute_statement", arguments: { databaseKey: normal.key, sql: "DROP TABLE mock_only" } });
+    const normalSessionId = await openSession(client, normal.key);
+    const blocked = await client.callTool({ name: "execute_statement", arguments: { sessionId: normalSessionId, sql: "DROP TABLE mock_only" } });
     assert.equal(blocked.isError, true);
-    assert.equal(JSON.parse((blocked.content as Array<{ text: string }>)[0]!.text).warning, undefined);
+    assert.equal(toolPayload(blocked).warning, undefined);
     assert.equal(approvals, supportsElicitation ? 1 : 0);
     assert.equal(statement.mock.calls.length, 1);
-    assert.equal(databaseConnect.mock.calls.length, 4);
+    assert.equal(databaseConnect.mock.calls.length, 2);
     statement.mock.mockImplementation(async () => { throw new Error("Simulated database failure"); });
     const failed = await client.callTool(calls[0]!);
     assert.equal(failed.isError, true);
-    assert.equal(JSON.parse((failed.content as Array<{ text: string }>)[0]!.text).warning, FULL_ACCESS_WARNING);
+    assert.equal(toolPayload(failed).warning, FULL_ACCESS_WARNING);
     const listed = await client.callTool({ name: "list_databases", arguments: {} });
-    const items = JSON.parse((listed.content as Array<{ text: string }>)[0]!.text).items;
+    const items = toolPayload(listed).items;
     assert.equal(items[0].dangerMode, true);
     assert.equal(items[0].warning, FULL_ACCESS_WARNING);
     assert.equal(items[1].warning, undefined);
@@ -148,11 +157,11 @@ for (const supportsElicitation of [false, true]) {
     });
     const approvalsBefore = approvals;
     const reloaded = await client.callTool({ name: "execute_script", arguments: {
-      databaseKey: normal.key, sqlFile: path.resolve("src/tests/fixtures/approval.sql")
+      sessionId: normalSessionId, sqlFile: path.resolve("src/tests/fixtures/approval.sql")
     } });
     get.mock.restore();
-    assert.notEqual(reloaded.isError, true);
-    assert.equal(JSON.parse((reloaded.content as Array<{ text: string }>)[0]!.text).warning, FULL_ACCESS_WARNING);
+    assert.equal(reloaded.isError, true);
+    assert.equal(toolPayload(reloaded).error.code, "SESSION_EXPIRED");
     assert.equal(approvals, approvalsBefore);
   });
 }
@@ -163,7 +172,6 @@ test("danger mode overrides adapter readonly settings without mutating target co
     { ...writableOracleTarget, readonly: true, dangerMode: true },
     { ...redisTarget, readonly: true, dangerMode: true },
     { ...writableMysqlTarget, type: "postgresql" as const, readonly: true, dangerMode: true },
-    { ...writableMysqlTarget, type: "opengauss" as const, readonly: true, dangerMode: true }
   ];
   for (const target of targets) {
     const adapter = createClient(target);
@@ -189,6 +197,8 @@ for (const clientName of ["confirmation-test", "codex-mcp-client"]) {
       });
       const databaseConnect = t.mock.method(MysqlAdapter.prototype, "connect", async () => undefined);
       t.mock.method(MysqlAdapter.prototype, "close", async () => undefined);
+    t.mock.method(MysqlAdapter.prototype, "isConnected", () => true);
+    t.mock.method(MysqlAdapter.prototype, "getTransactionStatus", async () => ({ state: "none" as const, autoCommit: true, observedAt: new Date().toISOString() }));
       const statement = t.mock.method(MysqlAdapter.prototype, "executeStatement", async () => ({
         command: "UPDATE", affectedRows: 1
       }));
@@ -217,6 +227,7 @@ for (const clientName of ["confirmation-test", "codex-mcp-client"]) {
           }
         }
       });
+      let defaultSessionId = "";
       let response: ElicitResult = { action: "accept", content: {} };
       let failConfirmation = false;
       let confirmationCalls = 0;
@@ -232,7 +243,7 @@ for (const clientName of ["confirmation-test", "codex-mcp-client"]) {
         assert.ok("requestedSchema" in request.params);
         assert.deepEqual(request.params.requestedSchema.properties, {});
         assert.equal(request.params.requestedSchema.required, undefined);
-        assert.ok(request.params.message.includes(`Database Key: ${expectedArguments.databaseKey}`));
+        assert.ok(request.params.message.includes(`Database Key: ${expectedArguments.sessionId === defaultSessionId ? "mysql-default" : "mysql-write"}`));
         assert.ok(request.params.message.includes(expectedSql));
         assert.match(request.params.message, /Accept to execute.*decline or cancel/);
         if (expectedClientName === "codex-mcp-client" && expectedAutoReview) {
@@ -253,6 +264,7 @@ for (const clientName of ["confirmation-test", "codex-mcp-client"]) {
         return response;
       });
       await client.connect(clientTransport);
+      const sessionId = await openSession(client, "mysql-write");
       const responses: ElicitResult[] = [
         { action: "accept", content: {} }, { action: "accept" }, { action: "decline" }, { action: "cancel" }
       ];
@@ -260,26 +272,26 @@ for (const clientName of ["confirmation-test", "codex-mcp-client"]) {
         expectedToolName = name;
         const sql = "update users set enabled = 0 where id = 1";
         expectedSql = sql;
-        expectedArguments = { databaseKey: "mysql-write", sql };
+        expectedArguments = { sessionId, sql };
         const execution = name === "execute_statement" ? statement : script;
         for (response of responses) {
           const before = execution.mock.calls.length;
           const connectionsBefore = databaseConnect.mock.calls.length;
-          const result = await client.callTool({ name, arguments: { databaseKey: "mysql-write", sql } });
+          const result = await client.callTool({ name, arguments: { sessionId, sql } });
           const accepted = response.action === "accept";
           assert.equal(result.isError === true, !accepted);
           assert.equal(execution.mock.calls.length - before, accepted ? 1 : 0);
-          assert.equal(databaseConnect.mock.calls.length - connectionsBefore, accepted ? 1 : 0);
+          assert.equal(databaseConnect.mock.calls.length - connectionsBefore, 0);
           if (accepted) assert.equal(execution.mock.calls.at(-1)?.arguments[0], sql);
         }
         failConfirmation = true;
-        const result = await client.callTool({ name, arguments: { databaseKey: "mysql-write", sql } });
+        const result = await client.callTool({ name, arguments: { sessionId, sql } });
         assert.equal(result.isError, true);
         assert.equal(execution.mock.calls.length, 2);
         failConfirmation = false;
       }
       expectedSql = "DROP TABLE auto_review_test";
-      expectedArguments = { databaseKey: "mysql-write", sql: expectedSql };
+      expectedArguments = { sessionId, sql: expectedSql };
       expectedToolName = "execute_statement";
       expectedSensitive = true;
       const highRiskResponses: ElicitResult[] = [
@@ -292,11 +304,11 @@ for (const clientName of ["confirmation-test", "codex-mcp-client"]) {
         const accepted = response.action === "accept";
         assert.equal(result.isError === true, !accepted);
         assert.equal(statement.mock.calls.length - executionsBefore, accepted ? 1 : 0);
-        assert.equal(databaseConnect.mock.calls.length - connectionsBefore, accepted ? 1 : 0);
+        assert.equal(databaseConnect.mock.calls.length - connectionsBefore, 0);
       }
       const sqlFile = path.resolve("src/tests/fixtures/approval.sql");
       expectedSql = readFileSync(sqlFile, "utf8");
-      expectedArguments = { databaseKey: "mysql-write", sqlFile, useTransaction: true };
+      expectedArguments = { sessionId, sqlFile, useTransaction: true };
       expectedToolName = "execute_script";
       expectedSensitive = true;
       response = { action: "accept", content: {} };
@@ -305,17 +317,18 @@ for (const clientName of ["confirmation-test", "codex-mcp-client"]) {
       assert.equal(script.mock.calls.at(-1)?.arguments[0], expectedSql);
       assert.deepEqual(script.mock.calls.at(-1)?.arguments[1], { useTransaction: true });
       assert.equal(confirmationCalls, 14);
-      assert.equal(databaseConnect.mock.calls.length, 6);
+      assert.equal(databaseConnect.mock.calls.length, 1);
       expectedAutoReview = false;
       expectedToolName = "execute_statement";
       expectedSql = "DROP TABLE auto_review_test";
-      expectedArguments = { databaseKey: "mysql-default", sql: expectedSql };
+      defaultSessionId = await openSession(client, "mysql-default");
+      expectedArguments = { sessionId: defaultSessionId, sql: expectedSql };
       const defaultResult = await client.callTool({ name: expectedToolName, arguments: expectedArguments });
       assert.notEqual(defaultResult.isError, true);
       assert.equal(confirmationCalls, 15);
-      assert.equal(databaseConnect.mock.calls.length, 7);
+      assert.equal(databaseConnect.mock.calls.length, 2);
       expectedAutoReview = codexAutoReview === true;
-      expectedArguments = { ...expectedArguments, databaseKey: "mysql-write" };
+      expectedArguments = { ...expectedArguments, sessionId };
       for (const name of ["codex-mcp-client", "ordinary-client", "codex-mcp-client"]) {
         expectedClientName = name;
         const result = await client.callTool({ name: expectedToolName, arguments: expectedArguments,
@@ -529,3 +542,15 @@ test("script confirmation rejects Redis targets", async () => {
       /Redis does not support SQL script execution/.test(error.message)
   );
 });
+
+/** 在测试 MCP 会话中显式连接，后续调用不再按请求建连。 */
+async function openSession(client: Client, databaseKey: string): Promise<string> {
+  const result = await client.callTool({ name: "connect", arguments: { databaseKey } });
+  assert.notEqual(result.isError, true);
+  return toolPayload(result).sessionId;
+}
+
+/** 从 MCP 结构化响应读取唯一一份结果。 */
+function toolPayload(value: unknown): any {
+  return (value as { structuredContent?: Record<string, unknown> }).structuredContent;
+}

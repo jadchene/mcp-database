@@ -17,11 +17,11 @@ const config: MysqlDatabaseConfig = {
   }
 };
 
-test("executeQuery uses a read-only transaction and adapter-side row limiting", async () => {
+test("executeQuery preserves the caller transaction and limits returned rows", async () => {
   const adapter = new FakeSqlAdapter(config);
   const result = await adapter.executeQuery("select * from users", [], 2);
 
-  assert.deepEqual(adapter.events, ["begin-readonly", "limited-query:2", "rollback"]);
+  assert.deepEqual(adapter.events, ["limited-query:2"]);
   assert.equal(result.rowCount, 2);
   assert.equal(result.truncated, true);
   assert.deepEqual(result.rows, [{ id: 1 }, { id: 2 }]);
@@ -38,6 +38,14 @@ test("write timeout cancels the operation and reports an unknown outcome", async
       error.code === "EXECUTION_OUTCOME_UNKNOWN"
   );
   assert.ok(adapter.events.includes("cancel"));
+});
+
+test("driver cancellation failure or an unresponsive cancellation cannot hold the timeout response", async (t) => {
+  for (const cancel of [async () => { throw new Error("cancel failed"); }, () => new Promise<void>(() => {})]) {
+    const adapter = new FakeSqlAdapter(config, 5, 50);
+    t.mock.method(adapter as any, "cancelCurrentOperation", cancel);
+    await assert.rejects(() => adapter.executeStatement("update users set enabled = 0 where id = 1"), (error: unknown) => error instanceof Error && "code" in error && error.code === "EXECUTION_OUTCOME_UNKNOWN");
+  }
 });
 
 test("listSchemas maps the lowercase schema_name returned by MySQL", async () => {

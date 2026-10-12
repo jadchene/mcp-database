@@ -57,7 +57,7 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
 
   log("info", "Database configuration loaded", {
     configPath,
-    count: databases.length,
+    count: databases.filter(database => database.enable !== false).length,
     logging: {
       enabled: validatedConfig.logging.enabled,
       directory: loggingDirectory
@@ -65,7 +65,7 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
     query: {
       timeoutMs: validatedConfig.query.timeoutMs ?? null
     },
-    databases: databases.map((item) => ({
+    databases: databases.filter(database => database.enable !== false).map((item) => ({
       key: item.key,
       type: item.type,
       readonly: item.readonly
@@ -73,6 +73,8 @@ export async function loadConfigFromPath(configPath: string): Promise<LoadedConf
   });
 
   return {
+    sessionIdleTimeoutMs: validatedConfig.sessionIdleTimeoutMs,
+    maxSessions: validatedConfig.maxSessions,
     configPath,
     loadedAt: new Date().toISOString(),
     databases,

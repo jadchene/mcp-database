@@ -42,4 +42,7 @@ if (missing.length > 0) {
   throw new Error(`npm package is missing required files: ${missing.join(", ")}`);
 }
 
+const removed = [...paths].filter(path => /opengauss/i.test(path));
+if (removed.length > 0) throw new Error(`Removed adapter remains in package: ${removed.join(", ")}`);
+
 process.stdout.write(`Verified ${paths.size} package files.\n`);

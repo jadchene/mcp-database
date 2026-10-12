@@ -11,7 +11,8 @@ test("structured logs redact SQL text, parameters, and secrets", () => {
     log("info", "test", {
       sql: "select * from users where password = ?",
       params: ["super-secret-value"],
-      password: "database-password"
+      password: "database-password",
+      sessionId: "full-secret-session-id"
     });
   } finally {
     console.error = original;
@@ -21,6 +22,7 @@ test("structured logs redact SQL text, parameters, and secrets", () => {
   assert.doesNotMatch(output, /select \*/i);
   assert.doesNotMatch(output, /super-secret-value/);
   assert.doesNotMatch(output, /database-password/);
+  assert.doesNotMatch(output, /full-secret-session-id/);
   assert.match(output, /fingerprint/);
   assert.match(output, /REDACTED/);
 });

@@ -165,12 +165,8 @@ async function callJsonTool(client, name, args) {
     arguments: args
   });
 
-  const textPart = result.content.find((item) => item.type === "text");
-  if (!textPart || typeof textPart.text !== "string") {
-    throw new Error(`Tool ${name} did not return text content`);
-  }
-
-  return JSON.parse(textPart.text);
+  if (!result.structuredContent) throw new Error(`Tool ${name} did not return structuredContent`);
+  return result.structuredContent;
 }
 
 async function waitForConfig(client, predicate, timeoutMs = 6000) {

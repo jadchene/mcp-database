@@ -14,7 +14,9 @@ export function summarizeLoadedConfig(config: LoadedConfig): Record<string, unkn
   return {
     configPath: config.configPath,
     loadedAt: config.loadedAt,
-    databaseCount: config.databases.length,
+    databaseCount: config.databases.filter((database) => database.enable !== false).length,
+    sessionIdleTimeoutMs: config.sessionIdleTimeoutMs ?? 1800000,
+    maxSessions: config.maxSessions ?? 32,
     logging: {
       enabled: config.logging.enabled,
       directory: config.logging.directory
@@ -22,7 +24,7 @@ export function summarizeLoadedConfig(config: LoadedConfig): Record<string, unkn
     query: {
       timeoutMs: config.query.timeoutMs
     },
-    items: config.databases.map((database) => summarizeDatabaseConfig(database))
+    items: config.databases.filter((database) => database.enable !== false).map((database) => summarizeDatabaseConfig(database))
   };
 }
 
@@ -52,7 +54,6 @@ function summarizeConnection(database: DatabaseConfig): Record<string, unknown> 
     case "mysql":
       return summarizeMysqlConnection(database);
     case "postgresql":
-    case "opengauss":
       return summarizePostgresConnection(database);
     case "oracle":
       return summarizeOracleConnection(database);
@@ -112,7 +113,6 @@ function summarizeLogicalDatabaseName(database: DatabaseConfig): string | number
     case "mysql":
       return database.connection.databaseName;
     case "postgresql":
-    case "opengauss":
       return database.connection.databaseName;
     case "oracle":
       return database.connection.serviceName ?? database.connection.sid ?? null;

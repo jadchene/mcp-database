@@ -1,7 +1,7 @@
 {
   "name": "@jadchene/mcp-database-service",
-  "version": "0.4.3",
-  "description": "A multi-database MCP server with lazy short-lived connections, strong read-only defaults, and explicit confirmation for writable SQL.",
+  "version": "0.5.0",
+  "description": "A multi-database MCP server with explicit persistent sessions, continuous SQL state, transaction tools, and guarded writes.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -18,6 +18,7 @@
     "dist/version.js",
     "dist/version.d.ts",
     "README.md",
+    "README.zh-CN.md",
     "LICENSE",
     "config/databases.example.json",
     "skills/database-mcp/SKILL.md"
@@ -29,7 +30,8 @@
     "test": "node --test \"dist/tests/*.test.js\"",
     "verify:reload": "node scripts/verify-config-reload.mjs",
     "verify:package": "node scripts/verify-package.mjs",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prebuild": "node scripts/clean-dist.mjs"
   },
   "keywords": [
     "mcp",
@@ -37,8 +39,7 @@
     "mysql",
     "oracle",
     "postgresql",
-    "redis",
-    "opengauss"
+    "redis"
   ],
   "repository": {
     "type": "git",

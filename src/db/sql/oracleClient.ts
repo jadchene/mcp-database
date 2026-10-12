@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { OracleDatabaseConfig } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
 import { BaseSqlAdapter } from "./baseSqlAdapter.js";
+import { transactionStatus, type TransactionStatus } from "../transaction.js";
 
 export class OracleAdapter extends BaseSqlAdapter {
   private connection: OracleConnection | null = null;
@@ -17,9 +18,7 @@ export class OracleAdapter extends BaseSqlAdapter {
         ? `${this.oracleConfig.connection.host}:${this.oracleConfig.connection.port ?? 1521}/${this.oracleConfig.connection.serviceName}`
         : `${this.oracleConfig.connection.host}:${this.oracleConfig.connection.port ?? 1521}:${this.oracleConfig.connection.sid}`;
 
-      const connectTimeoutSeconds = this.oracleConfig.connection.connectTimeoutMs
-        ? Math.max(1, Math.ceil(this.oracleConfig.connection.connectTimeoutMs / 1000))
-        : undefined;
+      const connectTimeoutSeconds = Math.max(1, Math.ceil((this.oracleConfig.connection.connectTimeoutMs ?? 10000) / 1000));
       this.connection = await oracledb.getConnection({
         user: this.oracleConfig.connection.user,
         password: this.oracleConfig.connection.password,
@@ -43,6 +42,14 @@ export class OracleAdapter extends BaseSqlAdapter {
     await this.connection.close();
     this.connection = null;
   }
+
+  /** Oracle DML 可以自然开启事务，使用驱动实际属性判断。 */
+  public override async getTransactionStatus(): Promise<TransactionStatus> {
+    if (this.connection) await this.connection.ping();
+    return transactionStatus(this.connection ? (this.connection.transactionInProgress ? "active" : "none") : "unknown", false);
+  }
+
+  public isConnected(): boolean { return this.connection !== null; }
 
   protected override async executeRaw(
     sql: string,
@@ -68,18 +75,12 @@ export class OracleAdapter extends BaseSqlAdapter {
       throw new ApplicationError("CONNECTION_ERROR", "Oracle connection is not open");
     }
 
-    try {
-      const result = await this.connection.execute(sql, params ?? []);
+      const result = await this.connection.execute(sql, params ?? [], { autoCommit: false });
       const affectedRows =
         typeof result === "object" && result !== null && "rowsAffected" in result
           ? Number((result as { rowsAffected?: number }).rowsAffected ?? 0)
           : null;
-      await this.connection.commit();
       return { affectedRows };
-    } catch (error) {
-      await this.connection.rollback().catch(() => undefined);
-      throw error;
-    }
   }
 
   protected override async executeLimitedQueryRaw(
@@ -102,16 +103,6 @@ export class OracleAdapter extends BaseSqlAdapter {
     };
   }
 
-  protected override async beginReadonlyTransaction(): Promise<void> {
-    await this.executeRaw("SET TRANSACTION READ ONLY");
-  }
-
-  protected override async rollbackReadonlyTransaction(): Promise<void> {
-    if (this.connection) {
-      await this.connection.rollback();
-    }
-  }
-
   protected override async cancelCurrentOperation(): Promise<void> {
     if (this.connection) {
       await this.connection.break().catch(() => undefined);
@@ -126,7 +117,13 @@ export class OracleAdapter extends BaseSqlAdapter {
     if (!this.connection) {
       throw new ApplicationError("CONNECTION_ERROR", "Oracle connection is not open");
     }
-    const statementId = `mcp_${randomUUID().replaceAll("-", "")}`;
+    const statementId = `mcp_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
+    const savepoint = statementId.toUpperCase();
+    if ((await this.getTransactionStatus()).state !== "active") {
+      throw new ApplicationError("NOT_SUPPORTED", "Oracle explain_query requires an active transaction so its plan can be cleaned up without opening or ending a transaction");
+    }
+    // EXPLAIN PLAN 会写计划表，保存点只清理本次计划而不回滚用户事务。
+    await this.connection.execute(`SAVEPOINT ${savepoint}`);
     try {
       await this.connection.execute(
         `EXPLAIN PLAN SET STATEMENT_ID = '${statementId}' FOR ${sql}`,
@@ -137,9 +134,7 @@ export class OracleAdapter extends BaseSqlAdapter {
         FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :statementId, 'TYPICAL'))
       `, [statementId], maxRows);
     } finally {
-      // EXPLAIN PLAN writes PLAN_TABLE. Roll back the isolated adapter
-      // transaction so explain_query does not leave rows or commit side effects.
-      await this.connection.rollback().catch(() => undefined);
+      await this.connection.execute(`ROLLBACK TO SAVEPOINT ${savepoint}`);
     }
   }
 
@@ -303,6 +298,8 @@ async function loadOracleDb(config: OracleDatabaseConfig): Promise<{
 }
 
 interface OracleConnection {
+  transactionInProgress: boolean;
+  ping(): Promise<void>;
   callTimeout: number;
   close(): Promise<void>;
   commit(): Promise<void>;

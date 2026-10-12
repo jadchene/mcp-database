@@ -1,6 +1,11 @@
 export type ErrorCode =
   | "CONFIG_ERROR"
   | "DATABASE_NOT_FOUND"
+  | "DATABASE_DISABLED"
+  | "SESSION_EXPIRED"
+  | "SESSION_BUSY"
+  | "SESSION_LIMIT_REACHED"
+  | "TRANSACTION_FAILED"
   | "UNSUPPORTED_DATABASE_TYPE"
   | "READONLY_VIOLATION"
   | "INVALID_ARGUMENT"
@@ -38,6 +43,13 @@ export function toApplicationError(error: unknown, fallbackCode: ErrorCode): App
   }
 
   if (error instanceof Error) {
+    const driverError = error as Error & { code?: string; fatal?: boolean };
+    if (driverError.fatal === true || /^(?:ECONNRESET|ECONNREFUSED|EPIPE|PROTOCOL_CONNECTION_LOST|NJS-500|NJS-501|ORA-03113|ORA-03114)/.test(driverError.code ?? driverError.message)) {
+      return new ApplicationError("CONNECTION_ERROR", error.message, { cause: driverError.code ?? error.name });
+    }
+    if (/^(?:57014|ER_QUERY_TIMEOUT|PROTOCOL_SEQUENCE_TIMEOUT|DPI-1067|ORA-01013)/.test(driverError.code ?? driverError.message)) {
+      return new ApplicationError("TIMEOUT", error.message, { cause: driverError.code ?? error.name });
+    }
     return new ApplicationError(fallbackCode, error.message, { cause: error.name });
   }
 

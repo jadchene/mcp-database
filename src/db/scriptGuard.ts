@@ -22,6 +22,8 @@ const HIGH_RISK_KEYWORDS = new Set([
 ]);
 
 export interface ScriptGuardResult {
+  /** 检测事务控制，避免脚本包装结束外层事务。 */
+  transactionControlKeywords: string[];
   /** 顶层语句数量（按分号粗估，忽略字符串与注释内的分号）。 */
   statementCount: number;
   /** 检测到的 DDL 关键词列表，用于提示"DDL 无法随事务回滚"。 */
@@ -49,6 +51,7 @@ export function scanScriptRisk(sql: string): ScriptGuardResult {
   }
 
   return {
+    transactionControlKeywords: words.filter((word, index) => ["BEGIN", "START", "COMMIT", "ROLLBACK", "AUTOCOMMIT", "SAVEPOINT"].includes(word) && words.indexOf(word) === index),
     statementCount: countTopLevelStatements(sql),
     ddlKeywords,
     highRiskKeywords
@@ -168,6 +171,10 @@ function readScriptWords(sql: string): string[] {
 
     if (current === "/" && next === "*") {
       const end = sql.indexOf("*/", i + 2);
+      // MySQL 版本注释包含可执行 SQL，事务包装和审批风险判断都必须读取内容。
+      if (end !== -1 && sql[i + 2] === "!") {
+        words.push(...readScriptWords(sql.slice(i + 3, end).replace(/^\d+\s*/, "")));
+      }
       i = end === -1 ? sql.length : end + 2;
       continue;
     }

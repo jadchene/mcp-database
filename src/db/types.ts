@@ -1,4 +1,5 @@
 import type { DatabaseConfig } from "../config/configTypes.js";
+import type { TransactionStatus } from "./transaction.js";
 import type {
   ColumnInfo,
   IndexInfo,
@@ -14,6 +15,12 @@ import type {
 } from "../core/resultTypes.js";
 
 export interface DatabaseAdapter {
+  /** 注册连接中断通知，返回监听器清理函数。 */
+  onConnectionLost?(listener: () => void): () => void;
+  /** 判断底层连接是否仍可操作。 */
+  isConnected?(): boolean;
+  /** 中止当前操作，用于超时和生命周期清理。 */
+  abort?(): Promise<void>;
   readonly config: DatabaseConfig;
   connect(): Promise<void>;
   close(): Promise<void>;
@@ -21,6 +28,12 @@ export interface DatabaseAdapter {
 }
 
 export interface SqlDatabaseAdapter extends DatabaseAdapter {
+  /** 读取实际数据库事务状态，不创建事务。 */
+  getTransactionStatus(): Promise<TransactionStatus>;
+  /** 提交已有事务，返回实际结果。 */
+  commitTransaction(): Promise<{ outcome: string }>;
+  /** 回滚已有事务，返回实际结果。 */
+  rollbackTransaction(): Promise<{ outcome: string }>;
   listSchemas(maxRows: number): Promise<LimitedMetadataResult<SchemaInfo>>;
   listTables(schema: string | undefined, maxRows: number): Promise<LimitedMetadataResult<TableInfo>>;
   describeTable(schema: string | undefined, table: string, maxRows: number): Promise<LimitedMetadataResult<ColumnInfo>>;

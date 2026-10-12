@@ -4,6 +4,9 @@ import type { MysqlDatabaseConfig } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
 import type { ScriptExecutionResult, ScriptStatementResult } from "../../core/resultTypes.js";
 import { BaseSqlAdapter } from "./baseSqlAdapter.js";
+import { readMysqlOkStatus, type MysqlPacket } from "./mysqlStatus.js";
+import { transactionStatus, type TransactionStatus } from "../transaction.js";
+import { scanScriptRisk } from "../scriptGuard.js";
 
 export class MysqlAdapter extends BaseSqlAdapter {
   private connection: Connection | null = null;
@@ -29,10 +32,12 @@ export class MysqlAdapter extends BaseSqlAdapter {
           database: this.mysqlConfig.connection.databaseName,
           user: this.mysqlConfig.connection.user,
           password: this.mysqlConfig.connection.password,
-          connectTimeout: this.mysqlConfig.connection.connectTimeoutMs,
+          connectTimeout: this.mysqlConfig.connection.connectTimeoutMs ?? 10000,
           multipleStatements: true,
           ssl
         });
+        connection.on("error", () => this.connectionLost());
+        connection.on("end", () => this.connectionLost());
         connection.connect((error) => {
           if (error) {
             connection.destroy();
@@ -61,11 +66,39 @@ export class MysqlAdapter extends BaseSqlAdapter {
     }
 
     const connection = this.connection;
-    this.connection = null;
-    await new Promise<void>((resolve, reject) => {
-      connection.end((error) => error ? reject(error) : resolve());
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        connection.end((error) => error ? reject(error) : resolve());
+      });
+    } finally { if (this.connection === connection) this.connection = null; }
   }
+
+  /** 使用原连接 COM_PING 的 OK 标记刷新状态，兼容 SELECT 不暴露 serverStatus 的驱动行为。 */
+  public override async getTransactionStatus(): Promise<TransactionStatus> {
+    const connection = this.connection;
+    if (!connection) return transactionStatus("unknown");
+    return this.runWithTimeout("transaction_status", "", [], () => new Promise<TransactionStatus>((resolve, reject) => {
+      let flags: number | null = null;
+      const timer = setTimeout(() => {
+        void this.abort();
+        reject(new ApplicationError("CONNECTION_ERROR", "MySQL transaction status response timed out"));
+      }, 5000);
+      // 仅封装本次返回的命令对象，不修改驱动源码或全局原型。
+      const command = connection.ping((error) => {
+        clearTimeout(timer);
+        if (error) { reject(error); return; }
+        resolve(transactionStatus(flags === null ? "unknown" : (flags & 1) !== 0 ? "active" : "none", flags === null ? null : (flags & 2) !== 0));
+      }) as unknown as { next: ((packet: MysqlPacket, conn: unknown) => unknown) | null };
+      const next = command.next;
+      if (!next) { clearTimeout(timer); reject(new ApplicationError("CONNECTION_ERROR", "Unsupported MySQL protocol command state")); return; }
+      command.next = function(packet, conn) {
+        flags = readMysqlOkStatus(packet);
+        return next.call(this, packet, conn);
+      };
+    }));
+  }
+
+  public isConnected(): boolean { return this.connection !== null; }
 
   protected override async executeRaw(
     sql: string,
@@ -108,7 +141,7 @@ export class MysqlAdapter extends BaseSqlAdapter {
     const connection = this.connection;
     return new Promise((resolve, reject) => {
       const rows: Record<string, unknown>[] = [];
-      let settled = false;
+      let truncated = false;
       const options: QueryOptions = {
         sql,
         values: (params ?? []) as never,
@@ -117,42 +150,16 @@ export class MysqlAdapter extends BaseSqlAdapter {
       const stream = connection.query(options).stream({ objectMode: true, highWaterMark: 16 });
 
       stream.on("data", (row: RowDataPacket) => {
-        rows.push(row as Record<string, unknown>);
-        if (rows.length <= maxRows || settled) {
-          return;
-        }
-
-        settled = true;
-        stream.destroy();
-        connection.destroy();
-        if (this.connection === connection) {
-          this.connection = null;
-        }
-        resolve({ rows: rows.slice(0, maxRows), truncated: true });
+        if (rows.length < maxRows) rows.push(row as Record<string, unknown>);
+        else truncated = true;
       });
       stream.once("end", () => {
-        if (!settled) {
-          settled = true;
-          resolve({ rows, truncated: false });
-        }
+        resolve({ rows, truncated });
       });
       stream.once("error", (error) => {
-        if (!settled) {
-          settled = true;
-          reject(error);
-        }
+        reject(error);
       });
     });
-  }
-
-  protected override async beginReadonlyTransaction(): Promise<void> {
-    await this.query("START TRANSACTION READ ONLY");
-  }
-
-  protected override async rollbackReadonlyTransaction(): Promise<void> {
-    if (this.connection) {
-      await this.query("ROLLBACK");
-    }
   }
 
   protected override async cancelCurrentOperation(): Promise<void> {
@@ -278,6 +285,15 @@ export class MysqlAdapter extends BaseSqlAdapter {
       throw new ApplicationError("CONNECTION_ERROR", "MySQL connection is not open");
     }
 
+    if (options.useTransaction) {
+      if ((await this.getTransactionStatus()).state !== "none") {
+        throw new ApplicationError("INVALID_ARGUMENT", "useTransaction requires a session without an existing transaction");
+      }
+      const risk = scanScriptRisk(sql);
+      if (risk.transactionControlKeywords.length > 0) {
+        throw new ApplicationError("INVALID_ARGUMENT", "useTransaction cannot wrap a script containing transaction control or autocommit changes");
+      }
+    }
     try {
       if (options.useTransaction) {
         await this.query("START TRANSACTION");

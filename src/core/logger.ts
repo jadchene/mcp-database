@@ -67,6 +67,7 @@ function sanitizeRecord(value: Record<string, unknown>): Record<string, unknown>
 
 function sanitizeLogValue(key: string, value: unknown): unknown {
   const normalizedKey = key.toLowerCase();
+  if (normalizedKey === "sessionid") return summarizeSensitiveText(value);
   if (
     normalizedKey === "error" ||
     normalizedKey === "message" ||

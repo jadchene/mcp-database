@@ -4,6 +4,7 @@ import Cursor from "pg-cursor";
 import type { PostgresDatabaseConfig } from "../../config/configTypes.js";
 import { ApplicationError, toApplicationError } from "../../core/errors.js";
 import { BaseSqlAdapter } from "./baseSqlAdapter.js";
+import { transactionStatus, type TransactionStatus } from "../transaction.js";
 
 export class PostgresAdapter extends BaseSqlAdapter {
   private client: Client | null = null;
@@ -21,9 +22,11 @@ export class PostgresAdapter extends BaseSqlAdapter {
         database: this.postgresConfig.connection.databaseName,
         user: this.postgresConfig.connection.user,
         password: this.postgresConfig.connection.password,
-        connectionTimeoutMillis: this.postgresConfig.connection.connectTimeoutMs,
+        connectionTimeoutMillis: this.postgresConfig.connection.connectTimeoutMs ?? 10000,
         ssl: this.postgresConfig.connection.ssl
       });
+      this.client.on("error", () => this.connectionLost());
+      this.client.on("end", () => this.connectionLost());
       await this.client.connect();
 
       if (this.postgresConfig.readonly) {
@@ -47,6 +50,25 @@ export class PostgresAdapter extends BaseSqlAdapter {
     this.client = null;
   }
 
+  /** 从 ReadyForQuery 的真实状态读取事务，等待错误和游标后的协议同步。 */
+  public override async getTransactionStatus(): Promise<TransactionStatus> {
+    const client = this.client as (Client & { getTransactionStatus(): string | null; readyForQuery: boolean; connection: { once(name: string, listener: () => void): void; removeListener(name: string, listener: () => void): void } }) | null;
+    if (!client) return transactionStatus("unknown");
+    if (!client.readyForQuery) {
+      await new Promise<void>((resolve) => {
+        const done = () => { clearTimeout(timer); client.connection.removeListener("readyForQuery", done); resolve(); };
+        const timer = setTimeout(done, 1000);
+        client.connection.once("readyForQuery", done);
+      });
+    }
+    if (!client.readyForQuery) throw new ApplicationError("CONNECTION_ERROR", "PostgreSQL protocol did not synchronize after the operation");
+    const status = client.getTransactionStatus();
+    return transactionStatus(status === "I" ? "none" : status === "T" ? "active" : status === "E" ? "failed" : "unknown", true);
+  }
+
+  /** 连接状态由会话池用于拒绝已关闭句柄。 */
+  public isConnected(): boolean { return this.client !== null; }
+
   protected override async executeRaw(
     sql: string,
     params?: unknown[] | Record<string, unknown>
@@ -62,13 +84,14 @@ export class PostgresAdapter extends BaseSqlAdapter {
   protected override async executeStatementRaw(
     sql: string,
     params?: unknown[] | Record<string, unknown>
-  ): Promise<{ affectedRows: number | null }> {
+  ): Promise<{ affectedRows: number | null; command?: string }> {
     if (!this.client) {
       throw new ApplicationError("CONNECTION_ERROR", "PostgreSQL connection is not open");
     }
 
     const result = await this.client.query(sql, Array.isArray(params) ? params : []);
     return {
+      command: result.command,
       affectedRows: typeof result.rowCount === "number" ? result.rowCount : null
     };
   }
@@ -90,20 +113,7 @@ export class PostgresAdapter extends BaseSqlAdapter {
         truncated: rows.length > maxRows
       };
     } finally {
-      await cursor.close().catch(() => undefined);
-    }
-  }
-
-  protected override async beginReadonlyTransaction(): Promise<void> {
-    if (!this.client) {
-      throw new ApplicationError("CONNECTION_ERROR", "PostgreSQL connection is not open");
-    }
-    await this.client.query("BEGIN READ ONLY");
-  }
-
-  protected override async rollbackReadonlyTransaction(): Promise<void> {
-    if (this.client) {
-      await this.client.query("ROLLBACK");
+      await cursor.close();
     }
   }
 

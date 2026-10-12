@@ -142,7 +142,7 @@ function containsUnsafeReadonlyConstruct(sql: string): boolean {
 /**
  * Extract unquoted SQL words while ignoring comments and the common quoting
  * forms used by the supported dialects. This is deliberately conservative;
- * database-level read-only transactions remain the authoritative boundary.
+ * SQL 校验不能替代数据库账号权限限制，不创建隐藏的查询事务。
  */
 function readSqlWords(sql: string): string[] {
   const words: string[] = [];

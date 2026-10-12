@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 
 import { scanScriptRisk } from "../db/scriptGuard.js";
 
+test("executable MySQL comments cannot hide transaction control or DDL risk", () => {
+  const result = scanScriptRisk("/*!80000 COMMIT */; /*!80000 DROP TABLE t */;");
+  assert.deepEqual(result.transactionControlKeywords, ["COMMIT"]);
+  assert.deepEqual(result.ddlKeywords, ["DROP"]);
+});
+
 test("script guard ignores keywords and semicolons inside strings and comments", () => {
   const result = scanScriptRisk(`
     SELECT '123 set @aaa=1; drop table users' AS text_value;

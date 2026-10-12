@@ -20,6 +20,7 @@ import type {
 import { normalizeDatabaseBoolean, normalizeRows } from "../../utils/normalize.js";
 import { assertReadonlySql, inspectSqlStatement } from "../readonlyGuard.js";
 import type { SqlDatabaseAdapter } from "../types.js";
+import { transactionStatus, type TransactionStatus } from "../transaction.js";
 
 type ExecuteRawResult = Record<string, unknown>[];
 type ExecuteStatementRawResult = {
@@ -35,6 +36,7 @@ type LimitedQueryRawResult = {
  * dialect-specific connection and metadata queries to subclasses.
  */
 export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
+  private readonly lostListeners = new Set<() => void>();
   public readonly config: MysqlDatabaseConfig | OracleDatabaseConfig | PostgresDatabaseConfig;
   protected readonly queryTimeoutMs: number | null;
 
@@ -50,6 +52,37 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
 
   public abstract close(): Promise<void>;
 
+  /** 注册连接中断通知；驱动内部重连不属于可用会话。 */
+  public onConnectionLost(listener: () => void): () => void {
+    this.lostListeners.add(listener);
+    return () => this.lostListeners.delete(listener);
+  }
+
+  /** 通知会话池连接失效。 */
+  protected connectionLost(): void { for (const listener of this.lostListeners) listener(); }
+
+  /** 超时或配置失效时中止当前操作。 */
+  public async abort(): Promise<void> { await this.cancelCurrentOperation(); }
+
+  /** 未实现状态读取的适配器不能将未知状态宣称为空事务。 */
+  public async getTransactionStatus(): Promise<TransactionStatus> { return transactionStatus("unknown"); }
+
+  /** 在已有连接提交，不能提交处于失败状态的事务。 */
+  public async commitTransaction(): Promise<{ outcome: string }> {
+    const status = await this.getTransactionStatus();
+    if (status.state === "none") return { outcome: "no_transaction" };
+    if (status.state === "failed") throw new ApplicationError("TRANSACTION_FAILED", "Transaction failed; roll back before continuing");
+    const result = await this.runWithTimeout("execute_statement", "COMMIT", [], () => this.executeStatementRaw("COMMIT"));
+    return { outcome: "command" in result && result.command === "ROLLBACK" ? "rolled_back" : "committed" };
+  }
+
+  /** 在已有连接回滚；空事务不创建新事务。 */
+  public async rollbackTransaction(): Promise<{ outcome: string }> {
+    if ((await this.getTransactionStatus()).state === "none") return { outcome: "no_transaction" };
+    await this.runWithTimeout("execute_statement", "ROLLBACK", [], () => this.executeStatementRaw("ROLLBACK"));
+    return { outcome: "rolled_back" };
+  }
+
   protected abstract executeRaw(sql: string, params?: unknown[] | Record<string, unknown>): Promise<ExecuteRawResult>;
 
   protected abstract executeStatementRaw(
@@ -62,10 +95,6 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     params: unknown[] | undefined,
     maxRows: number
   ): Promise<LimitedQueryRawResult>;
-
-  protected abstract beginReadonlyTransaction(): Promise<void>;
-
-  protected abstract rollbackReadonlyTransaction(): Promise<void>;
 
   protected abstract cancelCurrentOperation(): Promise<void>;
 
@@ -364,7 +393,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         maxRows
       });
       const result = await this.runWithTimeout("analyze_query", sql, params, () =>
-        this.withReadonlyTransaction(() => this.analyzeQueryRows(sql, params, maxRows))
+        this.analyzeQueryRows(sql, params, maxRows)
       );
       const limitedRows = normalizeRows(result.rows);
 
@@ -388,7 +417,7 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
         maxRows
       });
       const result = await this.runWithTimeout("execute_query", sql, params, () =>
-        this.withReadonlyTransaction(() => this.executeLimitedQueryRaw(sql, params, maxRows))
+        this.executeLimitedQueryRaw(sql, params, maxRows)
       );
       const limitedRows = normalizeRows(result.rows);
 
@@ -406,6 +435,18 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     const info = inspectSqlStatement(sql);
     if (info.isReadonlyQuery) {
       throw new ApplicationError("INVALID_ARGUMENT", "execute_statement only accepts non-query SQL");
+    }
+
+    if (this.config.readonly && this.config.dangerMode !== true && !/^ROLLBACK\b/i.test(info.normalizedSql)) {
+      throw new ApplicationError("READONLY_VIOLATION", "This target is configured as readonly");
+    }
+    if (/^COMMIT\s*;?$/i.test(info.normalizedSql)) {
+      const result = await this.commitTransaction();
+      return { command: result.outcome === "rolled_back" ? "ROLLBACK" : result.outcome === "no_transaction" ? "NO_TRANSACTION" : "COMMIT", affectedRows: null };
+    }
+    if (/^ROLLBACK\s*;?$/i.test(info.normalizedSql)) {
+      await this.rollbackTransaction();
+      return { command: "ROLLBACK", affectedRows: null };
     }
 
     try {
@@ -478,18 +519,16 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
           return;
         }
         settled = true;
-        void this.cancelCurrentOperation().finally(() => {
-          const isWrite = operation === "execute_statement" || operation === "execute_script";
-          reject(
-            new ApplicationError(isWrite ? "EXECUTION_OUTCOME_UNKNOWN" : "TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
+        const isWrite = operation === "execute_statement" || operation === "execute_script";
+        reject(new ApplicationError(isWrite ? "EXECUTION_OUTCOME_UNKNOWN" : "TIMEOUT", `Database operation timed out after ${timeoutMs}ms`, {
             operation,
             databaseKey: this.config.key,
             sqlLength: sql.length,
             parameterCount: Array.isArray(params) ? params.length : Object.keys(params ?? {}).length,
             timeoutMs
-          })
-          );
-        });
+        }));
+        // 先结束调用，再异步中止驱动；取消失败或挂起不能阻止超时错误返回。
+        void this.cancelCurrentOperation().catch(() => this.connectionLost());
       }, timeoutMs);
 
       void action()
@@ -512,12 +551,4 @@ export abstract class BaseSqlAdapter implements SqlDatabaseAdapter {
     });
   }
 
-  private async withReadonlyTransaction<T>(action: () => Promise<T>): Promise<T> {
-    await this.beginReadonlyTransaction();
-    try {
-      return await action();
-    } finally {
-      await this.rollbackReadonlyTransaction();
-    }
-  }
 }
