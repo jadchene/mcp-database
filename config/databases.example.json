@@ -1,44 +1,55 @@
 {
-  "logging": {
-    "enabled": true,
-    "directory": "./logs"
-  },
+  "sessionIdleTimeoutMs": 1800000,
+  "maxSessions": 32,
   "query": {
     "timeoutMs": 5000
+  },
+  "logging": {
+    "enabled": false,
+    "directory": "./logs"
   },
   "databases": [
     {
       "key": "main-mysql",
       "type": "mysql",
+      "enable": true,
       "readonly": true,
+      "dangerMode": false,
+      "codexAutoReview": false,
       "connection": {
         "host": "127.0.0.1",
         "port": 3306,
         "databaseName": "app_db",
         "user": "app_reader",
         "password": "replace-with-password",
-        "connectTimeoutMs": 5000
-      },
-      "dangerMode": false,
-      "codexAutoReview": false,
-      "enable": true
+        "connectTimeoutMs": 5000,
+        "ssl": false
+      }
     },
     {
-      "key": "cache-redis",
-      "type": "redis",
+      "key": "main-postgresql",
+      "type": "postgresql",
+      "enable": false,
       "readonly": true,
-      "connection": {
-        "url": "redis://127.0.0.1:6379/0",
-        "connectTimeoutMs": 5000
-      },
       "dangerMode": false,
       "codexAutoReview": false,
-      "enable": true
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "databaseName": "app_db",
+        "user": "app_reader",
+        "password": "replace-with-password",
+        "connectTimeoutMs": 5000,
+        "ssl": false
+      }
     },
     {
       "key": "oracle-thick-example",
       "type": "oracle",
+      "enable": false,
       "readonly": true,
+      "dangerMode": false,
+      "codexAutoReview": false,
       "connection": {
         "host": "127.0.0.1",
         "port": 1521,
@@ -47,13 +58,24 @@
         "password": "replace-with-password",
         "connectTimeoutMs": 5000,
         "clientMode": "thick",
-        "clientLibDir": "C:\\oracle\\instantclient_19_25"
-      },
+        "clientLibDir": "C:/oracle/instantclient_19_25"
+      }
+    },
+    {
+      "key": "cache-redis",
+      "type": "redis",
+      "enable": false,
+      "readonly": true,
       "dangerMode": false,
       "codexAutoReview": false,
-      "enable": true
+      "connection": {
+        "host": "127.0.0.1",
+        "port": 6379,
+        "databaseName": 0,
+        "username": "default",
+        "password": "replace-with-password",
+        "connectTimeoutMs": 5000
+      }
     }
-  ],
-  "sessionIdleTimeoutMs": 1800000,
-  "maxSessions": 32
+  ]
 }
