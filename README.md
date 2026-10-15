@@ -28,8 +28,6 @@ claude mcp add database -- mcp-database-service --config /absolute/path/database
 
 On Windows, a path such as `C:/mcp/database/databases.json` works. The client starts the stdio service; no separate background process or HTTP port is needed. The config path can also be supplied through `MCP_DATABASE_CONFIG`; there is no default config path.
 
-To use multiple MCP services through one entry point, connect through [MCP Gateway](https://github.com/jadchene/mcp-gateway).
-
 ## Configuration
 
 ```json

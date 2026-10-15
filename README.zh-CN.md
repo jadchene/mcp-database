@@ -28,8 +28,6 @@ claude mcp add database -- mcp-database-service --config /absolute/path/database
 
 Windows 可使用 `C:/mcp/database/databases.json` 这样的路径。客户端会启动 stdio 服务，无需单独运行后台进程或配置 HTTP 端口。也可通过 `MCP_DATABASE_CONFIG` 指定配置文件；服务没有默认配置路径。
 
-需要统一接入多个 MCP 服务时，可通过 [MCP Gateway](https://github.com/jadchene/mcp-gateway) 连接。
-
 ## 配置
 
 ```json
