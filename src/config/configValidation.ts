@@ -25,7 +25,7 @@ const mysqlSchema = z.object({
     user: z.string().min(1),
     password: z.string(),
     connectTimeoutMs: timeoutSchema,
-    ssl: z.union([z.boolean(), z.record(z.unknown())]).optional()
+    ssl: z.union([z.boolean(), z.record(z.string(), z.unknown())]).optional()
   }).strict()
 }).strict();
 
@@ -72,7 +72,7 @@ const postgresConnectionSchema = z.object({
   user: z.string().min(1),
   password: z.string(),
   connectTimeoutMs: timeoutSchema,
-  ssl: z.union([z.boolean(), z.record(z.unknown())]).optional()
+  ssl: z.union([z.boolean(), z.record(z.string(), z.unknown())]).optional()
 }).strict();
 
 const postgresSchema = z.object({

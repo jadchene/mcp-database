@@ -7,7 +7,7 @@ import { configureLogger, log } from "../core/logger.js";
 import type { LoadedConfig } from "./configTypes.js";
 import { validateDatabaseConfig } from "./configValidation.js";
 
-export function resolveConfigPath(argv: string[], env: NodeJS.ProcessEnv): string {
+function resolveConfigPath(argv: string[], env: NodeJS.ProcessEnv): string {
   const configIndex = argv.findIndex((value) => value === "--config");
   if (configIndex >= 0) {
     const explicitPath = argv[configIndex + 1];

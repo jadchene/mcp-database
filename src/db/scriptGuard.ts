@@ -21,7 +21,7 @@ const HIGH_RISK_KEYWORDS = new Set([
   "DUMPFILE"
 ]);
 
-export interface ScriptGuardResult {
+interface ScriptGuardResult {
   /** 检测事务控制，避免脚本包装结束外层事务。 */
   transactionControlKeywords: string[];
   /** 顶层语句数量（按分号粗估，忽略字符串与注释内的分号）。 */

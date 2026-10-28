@@ -18,7 +18,7 @@ const BLOCKED_KEYWORDS = new Set([
   "REPLACE"
 ]);
 
-export interface SqlStatementInfo {
+interface SqlStatementInfo {
   normalizedSql: string;
   firstKeyword: string;
   isReadonlyQuery: boolean;

@@ -2,7 +2,7 @@
  * Normalization converts driver-specific values into plain JSON-safe objects.
  * This keeps MCP responses stable regardless of which driver produced the data.
  */
-export function normalizeValue(value: unknown): unknown {
+function normalizeValue(value: unknown): unknown {
   if (value === null || value === undefined) {
     return value ?? null;
   }

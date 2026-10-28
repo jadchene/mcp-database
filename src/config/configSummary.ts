@@ -28,7 +28,7 @@ export function summarizeLoadedConfig(config: LoadedConfig): Record<string, unkn
   };
 }
 
-export function summarizeDatabaseConfig(database: DatabaseConfig): Record<string, unknown> {
+function summarizeDatabaseConfig(database: DatabaseConfig): Record<string, unknown> {
   return {
     key: database.key,
     databaseName: summarizeLogicalDatabaseName(database),

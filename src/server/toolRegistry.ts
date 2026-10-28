@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 
@@ -208,7 +207,7 @@ const redisScanSchema = z.object({
     .describe("SCAN count hint; defaults to 100.")
 }).strict();
 
-export type ToolExecutionContext = {
+type ToolExecutionContext = {
   connect(databaseKey: string): Promise<Record<string, unknown>>;
   disconnect(sessionId: string): Promise<Record<string, unknown>>;
   getDatabase(sessionId: string): LoadedConfig["databases"][number];
@@ -237,7 +236,7 @@ export type ToolExecutionContext = {
   }): Promise<{ status: "confirmed"; databaseFingerprint: string }>;
 };
 
-export interface ToolDefinition {
+interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -253,9 +252,9 @@ function makeTool<T>(
   return {
     name,
     description,
-    inputSchema: zodToJsonSchema(schema, {
-      target: "jsonSchema7",
-      $refStrategy: "none"
+    inputSchema: z.toJSONSchema(schema, {
+      target: "draft-7",
+      io: "input"
     }) as Record<string, unknown>,
     async run(args, context) {
       const parsed = schema.safeParse(args ?? {});

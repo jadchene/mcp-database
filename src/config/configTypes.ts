@@ -1,6 +1,6 @@
-export type DatabaseType = "mysql" | "oracle" | "postgresql" | "redis";
+type DatabaseType = "mysql" | "oracle" | "postgresql" | "redis";
 
-export interface BaseDatabaseConfig {
+interface BaseDatabaseConfig {
   key: string;
   /** 是否启用目标；省略时默认启用，禁用目标不展示给客户端。 */
   enable?: boolean;
@@ -72,12 +72,12 @@ export type DatabaseConfig =
   | PostgresDatabaseConfig
   | RedisDatabaseConfig;
 
-export interface LoggingConfig {
+interface LoggingConfig {
   enabled: boolean;
   directory?: string;
 }
 
-export interface QueryConfig {
+interface QueryConfig {
   timeoutMs?: number;
 }
 

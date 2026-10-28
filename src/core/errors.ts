@@ -1,4 +1,4 @@
-export type ErrorCode =
+type ErrorCode =
   | "CONFIG_ERROR"
   | "DATABASE_NOT_FOUND"
   | "DATABASE_DISABLED"
