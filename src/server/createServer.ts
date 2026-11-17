@@ -335,7 +335,7 @@ export async function createServer(config: LoadedConfig, webArgs?: string[]): Pr
     validate: validateDatabaseConfig, reload: () => reloadConfigSnapshot("manual")
   }) : undefined;
   const transport = new StdioServerTransport();
-  try { await web?.start(); await server.connect(transport); }
+  try { await web?.startOptional(); await server.connect(transport); }
   catch (error) { await web?.close(); disposeWatcher(); await sessions.close(); throw error; }
 
   let shutdownInFlight: Promise<void> | null = null;
