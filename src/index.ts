@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   }
 
   const config = await loadConfig(argv, process.env);
-  await createServer(config);
+  await createServer(config, argv);
   log("info", "MCP database server started", {
     databaseCount: config.databases.filter(database => database.enable !== false).length
   });

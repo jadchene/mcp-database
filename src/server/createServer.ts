@@ -1,3 +1,5 @@
+import { ConfigWebServer } from "../web-config/server.js";
+import { validateDatabaseConfig } from "../config/configValidation.js";
 import { watchFile, unwatchFile } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -59,7 +61,7 @@ type StatementConfirmationResult = { status: "confirmed"; databaseFingerprint: s
  * The MCP layer is intentionally thin: validate input, route to the correct
  * adapter, and return normalized JSON text for clients.
  */
-export async function createServer(config: LoadedConfig): Promise<Server> {
+export async function createServer(config: LoadedConfig, webArgs?: string[]): Promise<Server> {
   let currentConfig = config;
   const sessions = new SessionPool(() => currentConfig);
   let reloadInFlight: Promise<LoadedConfig> | null = null;
@@ -328,9 +330,13 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     }
   });
 
+  const web = webArgs ? new ConfigWebServer({
+    project: "database", configPath: config.configPath, args: webArgs, defaultPort: 3102,
+    validate: validateDatabaseConfig, reload: () => reloadConfigSnapshot("manual")
+  }) : undefined;
   const transport = new StdioServerTransport();
-  try { await server.connect(transport); }
-  catch (error) { disposeWatcher(); await sessions.close(); throw error; }
+  try { await web?.start(); await server.connect(transport); }
+  catch (error) { await web?.close(); disposeWatcher(); await sessions.close(); throw error; }
 
   let shutdownInFlight: Promise<void> | null = null;
   const shutdown = (): Promise<void> => {
@@ -348,10 +354,12 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
     disposeWatcher();
     process.removeListener("SIGINT", handleSignal);
     process.removeListener("SIGTERM", handleSignal);
+    process.stdin.removeListener("end", handleSignal);
+    process.stdin.removeListener("close", handleSignal);
   };
-  server.onclose = () => { dispose(); void sessions.close(); };
+  server.onclose = () => { dispose(); void web?.close(); void sessions.close(); };
   const originalClose = server.close.bind(server);
-  server.close = async () => { dispose(); await sessions.close(); await originalClose(); };
+  server.close = async () => { dispose(); await web?.close(); await sessions.close(); await originalClose(); };
   const handleSignal = (): void => {
     void shutdown()
       .then(() => process.exit(0))
@@ -364,6 +372,8 @@ export async function createServer(config: LoadedConfig): Promise<Server> {
   };
   process.once("SIGINT", handleSignal);
   process.once("SIGTERM", handleSignal);
+  process.stdin.once("end", handleSignal);
+  process.stdin.once("close", handleSignal);
   return server;
 }
 

@@ -77,5 +77,10 @@
         "connectTimeoutMs": 5000
       }
     }
-  ]
+  ],
+  "web": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 3102
+  }
 }

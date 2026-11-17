@@ -1,3 +1,5 @@
+import type { WebConfig } from "../web-config/options.js";
+
 type DatabaseType = "mysql" | "oracle" | "postgresql" | "redis";
 
 interface BaseDatabaseConfig {
@@ -82,6 +84,8 @@ interface QueryConfig {
 }
 
 export interface RootConfig {
+  /** 只在启动时读取的 Web 设置。 */
+  web?: WebConfig;
   /** 会话空闲超时毫秒数，默认 30 分钟。 */
   sessionIdleTimeoutMs?: number;
   /** 同时建立或持有的会话上限，默认 32。 */

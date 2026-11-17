@@ -1,3 +1,4 @@
+import { validateWebConfig } from "../web-config/options.js";
 import { z } from "zod";
 
 import { ApplicationError } from "../core/errors.js";
@@ -117,6 +118,7 @@ const databaseArraySchema = z
   .min(1);
 
 const rootConfigSchema = z.object({
+  web: z.unknown().optional(),
   sessionIdleTimeoutMs: z.number().int().min(100).max(86400000).default(1800000),
   maxSessions: z.number().int().min(1).max(1024).default(32),
   databases: databaseArraySchema,
@@ -147,6 +149,7 @@ export function validateDatabaseConfig(rawConfig: unknown): RootConfig {
     });
   }
 
+  validateWebConfig(parsed.data.web);
   const keys = new Set<string>();
   for (const config of parsed.data.databases) {
     if (keys.has(config.key)) {
@@ -157,6 +160,7 @@ export function validateDatabaseConfig(rawConfig: unknown): RootConfig {
   }
 
   return {
+    ...(parsed.data.web === undefined ? {} : { web: validateWebConfig(parsed.data.web) }),
     sessionIdleTimeoutMs: parsed.data.sessionIdleTimeoutMs,
     maxSessions: parsed.data.maxSessions,
     databases: parsed.data.databases as DatabaseConfig[],
